@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 # Ensure package import path is available when executed as script
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from meshweaver.gossip import GossipManager
 from meshweaver.models import Message, NodeID, NodeInfo
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
@@ -41,6 +42,13 @@ class MeshNode:
         self.udp_transport: Optional[asyncio.DatagramTransport] = None
         self.udp_protocol: Optional[UDPNodeProtocol] = None
         self.tcp_server: Optional[TCPTaskServer] = None
+        self.gossip_manager = GossipManager(
+            node_id=self.node_id.hex(),
+            host=self.host,
+            udp_port=udp_port,
+            heartbeat_interval=5.0,
+            dead_node_timeout=15.0,
+        )
 
         self.bound_udp_port: int = 0
         self.bound_tcp_port: int = 0
@@ -68,7 +76,16 @@ class MeshNode:
         self.bound_tcp_port = self.tcp_server.port
 
         # 2. Start UDP Protocol Endpoint
-        udp_factory = lambda: UDPNodeProtocol(node_id=self.node_id, tcp_port=self.bound_tcp_port)
+        self.gossip_manager.set_send_callback(
+            lambda host, port, payload: self.udp_protocol.send_gossip(host, port, payload)
+            if self.udp_protocol is not None else None
+        )
+        self.gossip_manager.set_receive_callback(self.gossip_manager.receive_heartbeat)
+        udp_factory = lambda: UDPNodeProtocol(
+            node_id=self.node_id,
+            tcp_port=self.bound_tcp_port,
+            gossip_handler=self.gossip_manager.receive_heartbeat,
+        )
         transport, protocol = await loop.create_datagram_endpoint(
             udp_factory,
             local_addr=(self.host, self.requested_udp_port),
@@ -76,6 +93,12 @@ class MeshNode:
         self.udp_transport = transport  # type: ignore
         self.udp_protocol = protocol  # type: ignore
         self.bound_udp_port = self.udp_protocol.local_udp_port
+        self.gossip_manager.bind_network(self.udp_protocol)
+        self.gossip_manager.set_send_callback(
+            lambda host, port, payload: self.udp_protocol.send_gossip(host, port, payload)
+            if self.udp_protocol is not None else None
+        )
+        await self.gossip_manager.start()
 
         logger.info(
             f"=== MeshWeaver Node Started ===\n"
@@ -88,11 +111,16 @@ class MeshNode:
 
     async def stop(self) -> None:
         """Stop node services and release ports."""
+        await self.gossip_manager.stop()
         if self.tcp_server:
             await self.tcp_server.stop()
         if self.udp_transport:
             self.udp_transport.close()
         logger.info("MeshNode stopped.")
+
+    def register_neighbor(self, node_id: str, host: str, udp_port: int, tcp_port: Optional[int] = None) -> None:
+        """Register a known neighbor for gossip heartbeats."""
+        self.gossip_manager.register_neighbor(node_id, host, udp_port, tcp_port)
 
     async def ping(self, target_host: str, target_udp_port: int, timeout: float = 5.0) -> Message:
         """Ping a remote node over UDP datagram protocol."""

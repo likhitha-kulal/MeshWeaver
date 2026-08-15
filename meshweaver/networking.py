@@ -23,9 +23,10 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
     Handles ping/pong node discovery and non-blocking RPC messaging.
     """
 
-    def __init__(self, node_id: NodeID, tcp_port: int):
+    def __init__(self, node_id: NodeID, tcp_port: int, gossip_handler=None):
         self.node_id = node_id
         self.tcp_port = tcp_port
+        self.gossip_handler = gossip_handler
         self.transport: Optional[asyncio.DatagramTransport] = None
         self._pending_requests: Dict[str, asyncio.Future[Message]] = {}
         self.local_udp_port: int = 0
@@ -46,6 +47,9 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
 
             if msg.type == MessageType.PING:
                 self._handle_ping(msg, addr)
+            elif msg.type == MessageType.GOSSIP:
+                if self.gossip_handler is not None:
+                    self.gossip_handler(msg.payload)
             elif msg.msg_id in self._pending_requests:
                 # Resolve pending RPC request future
                 fut = self._pending_requests.pop(msg.msg_id)
@@ -76,6 +80,17 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
             raise RuntimeError("UDP transport is not connected")
         payload_bytes = msg.to_json().encode("utf-8")
         self.transport.sendto(payload_bytes, (target_ip, target_port))
+
+    def send_gossip(self, target_ip: str, target_port: int, payload: Dict[str, object]) -> None:
+        """Broadcast a gossip heartbeat to a known neighbor."""
+        gossip_msg = Message(
+            type=MessageType.GOSSIP,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.local_udp_port,
+            sender_tcp_port=self.tcp_port,
+            payload=payload,
+        )
+        self.send_datagram(gossip_msg, target_ip, target_port)
 
     async def send_ping(self, target_ip: str, target_port: int, timeout: float = 5.0) -> Message:
         """
