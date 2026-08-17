@@ -1,6 +1,12 @@
 """
+<<<<<<< HEAD
 MeshWeaver Week 1 Test Suite (Execution & Reliability Track - Person B / Likhitha)
 Tests cloudpickle task serialization, local execution, error handling, and TCP task server/client.
+=======
+MeshWeaver Week 1 Test Suite
+Tests NodeID XOR distances, cloudpickle task serialization, UDP Ping-Pong RPCs,
+and TCP remote task execution with error handling.
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 """
 
 import asyncio
@@ -8,12 +14,25 @@ import os
 import sys
 import unittest
 
+<<<<<<< HEAD
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from meshweaver.node import TaskExecutionNode
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
 
+=======
+# Ensure workspace root is in python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+from meshweaver.gossip import GossipManager
+from meshweaver.models import MessageType, NodeID, TaskResult
+from meshweaver.node import MeshNode
+from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
+
+
+# Sample Functions for Testing
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 def add(a: int, b: int) -> int:
     return a + b
 
@@ -38,10 +57,35 @@ async def async_multiplier(a: int, b: int) -> int:
     return a * b
 
 
+<<<<<<< HEAD
 class TestWeek1Execution(unittest.IsolatedAsyncioTestCase):
 
     def test_task_serialization_sync_and_async(self):
         """Test serializing and local execution of sync, closure, and async functions."""
+=======
+class TestWeek1(unittest.IsolatedAsyncioTestCase):
+
+    def test_node_id_creation_and_distance(self):
+        """Test NodeID hex generation, parsing, and Kademlia XOR distance metric."""
+        n1 = NodeID()
+        n2 = NodeID()
+
+        self.assertEqual(len(n1.hex()), 40)
+        self.assertEqual(len(n2.hex()), 40)
+
+        # Distance to self should be 0
+        self.assertEqual(n1.distance(n1), 0)
+
+        # Symmetry: d(a, b) == d(b, a)
+        self.assertEqual(n1.distance(n2), n2.distance(n1))
+
+        # Reconstruct from hex
+        n1_reconstructed = NodeID(n1.hex())
+        self.assertEqual(n1, n1_reconstructed)
+
+    def test_task_serialization_sync_and_async(self):
+        """Test serializing and local execution of sync and async functions."""
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
         # 1. Sync addition
         payload_add = TaskSerializer.serialize(add, 15, 25)
         func, args, kwargs = TaskSerializer.deserialize(payload_add)
@@ -77,10 +121,37 @@ class TestWeek1Execution(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.error_type, "ZeroDivisionError")
 
+<<<<<<< HEAD
     async def test_remote_task_execution(self):
         """Test remote task execution over TCP between Node A and Node B."""
         node_a = TaskExecutionNode(host="127.0.0.1", tcp_port=19101)
         node_b = TaskExecutionNode(host="127.0.0.1", tcp_port=19103)
+=======
+    async def test_udp_ping_pong(self):
+        """Test UDP PING / PONG RPC discovery between two local nodes."""
+        node_a = MeshNode(host="127.0.0.1", udp_port=19000, tcp_port=19001)
+        node_b = MeshNode(host="127.0.0.1", udp_port=19002, tcp_port=19003)
+
+        await node_a.start()
+        await node_b.start()
+
+        try:
+            # Node A pings Node B
+            pong_msg = await node_a.ping("127.0.0.1", node_b.bound_udp_port, timeout=3.0)
+
+            self.assertEqual(pong_msg.type, MessageType.PONG)
+            self.assertEqual(pong_msg.sender_id, node_b.node_id.hex())
+            self.assertEqual(pong_msg.payload.get("status"), "OK")
+
+        finally:
+            await node_a.stop()
+            await node_b.stop()
+
+    async def test_remote_task_execution(self):
+        """Test remote task execution over TCP between Node A and Node B."""
+        node_a = MeshNode(host="127.0.0.1", udp_port=19100, tcp_port=19101)
+        node_b = MeshNode(host="127.0.0.1", udp_port=19102, tcp_port=19103)
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 
         await node_a.start()
         await node_b.start()
@@ -110,6 +181,38 @@ class TestWeek1Execution(unittest.IsolatedAsyncioTestCase):
             await node_a.stop()
             await node_b.stop()
 
+<<<<<<< HEAD
+=======
+    def test_task_result_payload_hash_and_verification(self):
+        """TaskResult payload hashes should detect tampering."""
+        result = TaskResult(task_id="t-1", success=True, result_bytes=b"hello world")
+        self.assertIsNotNone(result.payload_hash)
+        self.assertTrue(result.verify_payload())
+
+        result.result_bytes = b"tampered"
+        self.assertFalse(result.verify_payload())
+
+    def test_gossip_manager_tracks_peer_load_and_dead_nodes(self):
+        """Gossip manager should store peer load snapshots and evict stale members."""
+        manager = GossipManager(node_id="node-a", heartbeat_interval=0.01, dead_node_timeout=0.1)
+        manager.register_neighbor("node-b", "127.0.0.1", 9001)
+
+        manager.receive_heartbeat({
+            "sender_id": "node-b",
+            "ip": "127.0.0.1",
+            "udp_port": 9001,
+            "cpu_percent": 42.0,
+            "ram_percent": 55.0,
+            "timestamp": 1000.0,
+        })
+
+        self.assertAlmostEqual(manager.peer_loads["node-b"].cpu_percent, 42.0)
+        manager.peer_loads["node-b"].timestamp = 0.0
+        evicted = manager.expire_dead_nodes(now=1000.2)
+        self.assertIn("node-b", evicted)
+        self.assertNotIn("node-b", manager.peer_loads)
+
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,12 +1,19 @@
 """
+<<<<<<< HEAD
 MeshWeaver Networking Protocol (Execution & Reliability Track - Person B / Likhitha)
 Provides TCPTaskServer and TCPTaskClient for reliable binary task transmission and execution over streaming sockets.
+=======
+MeshWeaver Networking Protocol Implementation
+Provides UDP protocol (DatagramProtocol) for node discovery / PING-PONG RPCs,
+and TCP server/client transport for reliable binary task execution transfer.
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 """
 
 import asyncio
 import json
 import logging
 import struct
+<<<<<<< HEAD
 from typing import Optional
 
 from meshweaver.models import TaskResult
@@ -15,6 +22,125 @@ from meshweaver.task_serializer import TaskSerializer
 logger = logging.getLogger("meshweaver.networking")
 
 
+=======
+from typing import Dict, Optional, Tuple
+
+from meshweaver.models import Message, MessageType, NodeID, NodeInfo, TaskResult
+from meshweaver.task_serializer import TaskSerializer
+
+# Set up logger for MeshWeaver networking
+logger = logging.getLogger("meshweaver.networking")
+
+
+class UDPNodeProtocol(asyncio.DatagramProtocol):
+    """
+    Asyncio DatagramProtocol implementation for MeshWeaver UDP communication.
+    Handles ping/pong node discovery and non-blocking RPC messaging.
+    """
+
+    def __init__(self, node_id: NodeID, tcp_port: int, gossip_handler=None):
+        self.node_id = node_id
+        self.tcp_port = tcp_port
+        self.gossip_handler = gossip_handler
+        self.transport: Optional[asyncio.DatagramTransport] = None
+        self._pending_requests: Dict[str, asyncio.Future[Message]] = {}
+        self.local_udp_port: int = 0
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self.transport = transport  # type: ignore
+        sock = transport.get_extra_info("socket")
+        if sock:
+            self.local_udp_port = sock.getsockname()[1]
+        logger.info(f"UDP server bound on port {self.local_udp_port} for node {self.node_id}")
+
+    def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
+        """Called by asyncio event loop when a UDP datagram is received."""
+        try:
+            json_str = data.decode("utf-8")
+            msg = Message.from_json(json_str)
+            logger.info(f"[UDP RECV] {msg.type} from {addr[0]}:{addr[1]} (Sender ID: {msg.sender_id[:8]}..., msg_id={msg.msg_id[:8]})")
+
+            if msg.type == MessageType.PING:
+                self._handle_ping(msg, addr)
+            elif msg.type == MessageType.GOSSIP:
+                if self.gossip_handler is not None:
+                    self.gossip_handler(msg.payload)
+            elif msg.msg_id in self._pending_requests:
+                # Resolve pending RPC request future
+                fut = self._pending_requests.pop(msg.msg_id)
+                if not fut.done():
+                    fut.set_result(msg)
+            else:
+                logger.debug(f"[UDP UNHANDLED] Message {msg.msg_id[:8]} type {msg.type} ignored")
+
+        except Exception as e:
+            logger.error(f"[UDP ERROR] Exception handling incoming datagram from {addr}: {e}", exc_info=True)
+
+    def _handle_ping(self, ping_msg: Message, addr: Tuple[str, int]) -> None:
+        """Respond to PING with PONG datagram."""
+        pong_msg = Message(
+            msg_id=ping_msg.msg_id,  # Echo back same msg_id for transaction matching
+            type=MessageType.PONG,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.local_udp_port,
+            sender_tcp_port=self.tcp_port,
+            payload={"status": "OK", "received_ping_id": ping_msg.msg_id},
+        )
+        self.send_datagram(pong_msg, addr[0], addr[1])
+        logger.info(f"[UDP SENT] PONG to {addr[0]}:{addr[1]} (msg_id={pong_msg.msg_id[:8]})")
+
+    def send_datagram(self, msg: Message, target_ip: str, target_port: int) -> None:
+        """Send raw JSON encoded datagram to target endpoint."""
+        if not self.transport:
+            raise RuntimeError("UDP transport is not connected")
+        payload_bytes = msg.to_json().encode("utf-8")
+        self.transport.sendto(payload_bytes, (target_ip, target_port))
+
+    def send_gossip(self, target_ip: str, target_port: int, payload: Dict[str, object]) -> None:
+        """Broadcast a gossip heartbeat to a known neighbor."""
+        gossip_msg = Message(
+            type=MessageType.GOSSIP,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.local_udp_port,
+            sender_tcp_port=self.tcp_port,
+            payload=payload,
+        )
+        self.send_datagram(gossip_msg, target_ip, target_port)
+
+    async def send_ping(self, target_ip: str, target_port: int, timeout: float = 5.0) -> Message:
+        """
+        Send PING to target node and wait for PONG response.
+        """
+        ping_msg = Message(
+            type=MessageType.PING,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.local_udp_port,
+            sender_tcp_port=self.tcp_port,
+        )
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Message] = loop.create_future()
+        self._pending_requests[ping_msg.msg_id] = future
+
+        logger.info(f"[UDP SENT] PING to {target_ip}:{target_port} (msg_id={ping_msg.msg_id[:8]})")
+        self.send_datagram(ping_msg, target_ip, target_port)
+
+        try:
+            response = await asyncio.wait_for(future, timeout=timeout)
+            return response
+        except asyncio.TimeoutError:
+            self._pending_requests.pop(ping_msg.msg_id, None)
+            logger.warning(f"[UDP TIMEOUT] PING to {target_ip}:{target_port} timed out after {timeout}s")
+            raise TimeoutError(f"PING to {target_ip}:{target_port} timed out after {timeout}s")
+
+    def error_received(self, exc: Exception) -> None:
+        logger.error(f"[UDP ERROR] Protocol error: {exc}")
+
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        logger.info(f"UDP connection closed: {exc}")
+
+
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 class TCPTaskServer:
     """
     Length-prefixed streaming TCP server for receiving serialized task execution payloads.
@@ -24,7 +150,12 @@ class TCPTaskServer:
     HEADER_FORMAT = ">I"
     HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
+<<<<<<< HEAD
     def __init__(self, host: str = "127.0.0.1", port: int = 9001):
+=======
+    def __init__(self, node_id: NodeID, host: str, port: int):
+        self.node_id = node_id
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
         self.host = host
         self.port = port
         self._server: Optional[asyncio.Server] = None
@@ -48,14 +179,25 @@ class TCPTaskServer:
         logger.info(f"[TCP RECV] Connection established from {peer_addr}")
 
         try:
+<<<<<<< HEAD
+=======
+            # Read 4-byte header
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             header_bytes = await reader.readexactly(self.HEADER_SIZE)
             (payload_len,) = struct.unpack(self.HEADER_FORMAT, header_bytes)
 
             logger.info(f"[TCP RECV] Reading {payload_len} bytes task payload from {peer_addr}")
             task_payload = await reader.readexactly(payload_len)
 
+<<<<<<< HEAD
             task_result = await TaskSerializer.execute_task(task_payload)
 
+=======
+            # Execute task safely
+            task_result = await TaskSerializer.execute_task(task_payload)
+
+            # Serialize result to JSON string format
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             result_json_bytes = json.dumps(task_result.to_dict()).encode("utf-8")
             resp_len_header = struct.pack(self.HEADER_FORMAT, len(result_json_bytes))
 
@@ -92,13 +234,25 @@ class TCPTaskClient:
         async def _communicator() -> TaskResult:
             reader, writer = await asyncio.open_connection(host, port)
             try:
+<<<<<<< HEAD
+=======
+                # Send payload length header + payload bytes
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
                 header = struct.pack(cls.HEADER_FORMAT, len(payload_bytes))
                 writer.write(header + payload_bytes)
                 await writer.drain()
 
+<<<<<<< HEAD
                 resp_header = await reader.readexactly(cls.HEADER_SIZE)
                 (resp_len,) = struct.unpack(cls.HEADER_FORMAT, resp_header)
 
+=======
+                # Read response length header
+                resp_header = await reader.readexactly(cls.HEADER_SIZE)
+                (resp_len,) = struct.unpack(cls.HEADER_FORMAT, resp_header)
+
+                # Read response payload
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
                 resp_json_bytes = await reader.readexactly(resp_len)
                 resp_dict = json.loads(resp_json_bytes.decode("utf-8"))
 

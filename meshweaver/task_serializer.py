@@ -1,5 +1,9 @@
 """
+<<<<<<< HEAD
 MeshWeaver Task Serializer (Execution & Reliability Track - Person B / Likhitha)
+=======
+MeshWeaver Task Serializer
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 Handles cloudpickle serialization/deserialization of arbitrary Python functions,
 arguments, execution results, and remote error handling.
 """
@@ -77,11 +81,19 @@ class TaskSerializer:
         try:
             func, args, kwargs = cls.deserialize(payload)
 
+<<<<<<< HEAD
+=======
+            # Check if function is an async coroutine
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             if inspect.iscoroutinefunction(func):
                 raw_result = await func(*args, **kwargs)
             else:
                 raw_result = func(*args, **kwargs)
 
+<<<<<<< HEAD
+=======
+            # Serialize the return value using cloudpickle
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             result_bytes = cloudpickle.dumps(raw_result)
 
             return TaskResult(
