@@ -1,13 +1,28 @@
 """
+<<<<<<< HEAD
+MeshWeaver Networking Protocol (Execution & Reliability Track - Person B / Likhitha)
+Provides TCPTaskServer and TCPTaskClient for reliable binary task transmission and execution over streaming sockets.
+=======
 MeshWeaver Networking Protocol Implementation
 Provides UDP protocol (DatagramProtocol) for node discovery / PING-PONG RPCs,
 and TCP server/client transport for reliable binary task execution transfer.
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 """
 
 import asyncio
 import json
 import logging
 import struct
+<<<<<<< HEAD
+from typing import Optional
+
+from meshweaver.models import TaskResult
+from meshweaver.task_serializer import TaskSerializer
+
+logger = logging.getLogger("meshweaver.networking")
+
+
+=======
 from typing import Dict, Optional, Tuple
 
 from meshweaver.models import Message, MessageType, NodeID, NodeInfo, TaskResult
@@ -125,6 +140,7 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         logger.info(f"UDP connection closed: {exc}")
 
 
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 class TCPTaskServer:
     """
     Length-prefixed streaming TCP server for receiving serialized task execution payloads.
@@ -134,8 +150,12 @@ class TCPTaskServer:
     HEADER_FORMAT = ">I"
     HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
+<<<<<<< HEAD
+    def __init__(self, host: str = "127.0.0.1", port: int = 9001):
+=======
     def __init__(self, node_id: NodeID, host: str, port: int):
         self.node_id = node_id
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
         self.host = host
         self.port = port
         self._server: Optional[asyncio.Server] = None
@@ -159,17 +179,25 @@ class TCPTaskServer:
         logger.info(f"[TCP RECV] Connection established from {peer_addr}")
 
         try:
+<<<<<<< HEAD
+=======
             # Read 4-byte header
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             header_bytes = await reader.readexactly(self.HEADER_SIZE)
             (payload_len,) = struct.unpack(self.HEADER_FORMAT, header_bytes)
 
             logger.info(f"[TCP RECV] Reading {payload_len} bytes task payload from {peer_addr}")
             task_payload = await reader.readexactly(payload_len)
 
+<<<<<<< HEAD
+            task_result = await TaskSerializer.execute_task(task_payload)
+
+=======
             # Execute task safely
             task_result = await TaskSerializer.execute_task(task_payload)
 
             # Serialize result to JSON string format
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             result_json_bytes = json.dumps(task_result.to_dict()).encode("utf-8")
             resp_len_header = struct.pack(self.HEADER_FORMAT, len(result_json_bytes))
 
@@ -206,16 +234,25 @@ class TCPTaskClient:
         async def _communicator() -> TaskResult:
             reader, writer = await asyncio.open_connection(host, port)
             try:
+<<<<<<< HEAD
+=======
                 # Send payload length header + payload bytes
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
                 header = struct.pack(cls.HEADER_FORMAT, len(payload_bytes))
                 writer.write(header + payload_bytes)
                 await writer.drain()
 
+<<<<<<< HEAD
+                resp_header = await reader.readexactly(cls.HEADER_SIZE)
+                (resp_len,) = struct.unpack(cls.HEADER_FORMAT, resp_header)
+
+=======
                 # Read response length header
                 resp_header = await reader.readexactly(cls.HEADER_SIZE)
                 (resp_len,) = struct.unpack(cls.HEADER_FORMAT, resp_header)
 
                 # Read response payload
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
                 resp_json_bytes = await reader.readexactly(resp_len)
                 resp_dict = json.loads(resp_json_bytes.decode("utf-8"))
 

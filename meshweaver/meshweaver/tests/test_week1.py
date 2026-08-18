@@ -1,7 +1,12 @@
 """
+<<<<<<< HEAD
+MeshWeaver Week 1 Test Suite (Execution & Reliability Track - Person B / Likhitha)
+Tests cloudpickle task serialization, local execution, error handling, and TCP task server/client.
+=======
 MeshWeaver Week 1 Test Suite
 Tests NodeID XOR distances, cloudpickle task serialization, UDP Ping-Pong RPCs,
 and TCP remote task execution with error handling.
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 """
 
 import asyncio
@@ -9,6 +14,14 @@ import os
 import sys
 import unittest
 
+<<<<<<< HEAD
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+from meshweaver.node import TaskExecutionNode
+from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
+
+
+=======
 # Ensure workspace root is in python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -19,6 +32,7 @@ from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
 
 # Sample Functions for Testing
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 def add(a: int, b: int) -> int:
     return a + b
 
@@ -43,6 +57,12 @@ async def async_multiplier(a: int, b: int) -> int:
     return a * b
 
 
+<<<<<<< HEAD
+class TestWeek1Execution(unittest.IsolatedAsyncioTestCase):
+
+    def test_task_serialization_sync_and_async(self):
+        """Test serializing and local execution of sync, closure, and async functions."""
+=======
 class TestWeek1(unittest.IsolatedAsyncioTestCase):
 
     def test_node_id_creation_and_distance(self):
@@ -65,6 +85,7 @@ class TestWeek1(unittest.IsolatedAsyncioTestCase):
 
     def test_task_serialization_sync_and_async(self):
         """Test serializing and local execution of sync and async functions."""
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
         # 1. Sync addition
         payload_add = TaskSerializer.serialize(add, 15, 25)
         func, args, kwargs = TaskSerializer.deserialize(payload_add)
@@ -100,6 +121,12 @@ class TestWeek1(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(ctx.exception.error_type, "ZeroDivisionError")
 
+<<<<<<< HEAD
+    async def test_remote_task_execution(self):
+        """Test remote task execution over TCP between Node A and Node B."""
+        node_a = TaskExecutionNode(host="127.0.0.1", tcp_port=19101)
+        node_b = TaskExecutionNode(host="127.0.0.1", tcp_port=19103)
+=======
     async def test_udp_ping_pong(self):
         """Test UDP PING / PONG RPC discovery between two local nodes."""
         node_a = MeshNode(host="127.0.0.1", udp_port=19000, tcp_port=19001)
@@ -124,6 +151,7 @@ class TestWeek1(unittest.IsolatedAsyncioTestCase):
         """Test remote task execution over TCP between Node A and Node B."""
         node_a = MeshNode(host="127.0.0.1", udp_port=19100, tcp_port=19101)
         node_b = MeshNode(host="127.0.0.1", udp_port=19102, tcp_port=19103)
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 
         await node_a.start()
         await node_b.start()
@@ -153,6 +181,8 @@ class TestWeek1(unittest.IsolatedAsyncioTestCase):
             await node_a.stop()
             await node_b.stop()
 
+<<<<<<< HEAD
+=======
     def test_task_result_payload_hash_and_verification(self):
         """TaskResult payload hashes should detect tampering."""
         result = TaskResult(task_id="t-1", success=True, result_bytes=b"hello world")
@@ -182,6 +212,7 @@ class TestWeek1(unittest.IsolatedAsyncioTestCase):
         self.assertIn("node-b", evicted)
         self.assertNotIn("node-b", manager.peer_loads)
 
+>>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 
 if __name__ == "__main__":
     unittest.main()
