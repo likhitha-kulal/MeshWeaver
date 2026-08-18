@@ -153,3 +153,16 @@ class GossipManager:
             self.peer_loads.pop(node_id, None)
             self.neighbors.pop(node_id, None)
         return dead
+
+    def get_least_loaded_peer(self) -> Optional[PeerLoadSnapshot]:
+        """
+        Return the peer with the lowest combined CPU and RAM load.
+        Returns None if no peers are available.
+        """
+        if not self.peer_loads:
+            return None
+        # Calculate combined load score and pick the minimum
+        return min(
+            self.peer_loads.values(),
+            key=lambda snapshot: snapshot.cpu_percent + snapshot.ram_percent,
+        )

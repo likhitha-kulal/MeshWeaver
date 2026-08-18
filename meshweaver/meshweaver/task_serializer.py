@@ -1,9 +1,5 @@
 """
-<<<<<<< HEAD
-MeshWeaver Task Serializer (Execution & Reliability Track - Person B / Likhitha)
-=======
 MeshWeaver Task Serializer
->>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
 Handles cloudpickle serialization/deserialization of arbitrary Python functions,
 arguments, execution results, and remote error handling.
 """
@@ -16,7 +12,7 @@ from typing import Any, Callable, Dict, Tuple
 import uuid
 
 import cloudpickle
-from meshweaver.models import TaskResult
+from meshweaver.models import TaskResult, TaskEnvelope
 
 
 class RemoteExecutionError(Exception):
@@ -42,7 +38,8 @@ class TaskSerializer:
     def serialize(func: Callable, *args: Any, **kwargs: Any) -> bytes:
         """
         Serialize a Python function along with its positional and keyword arguments.
-        Returns a cloudpickled binary payload.
+        Wraps the cloudpickled payload in a TaskEnvelope with SHA-256 integrity hash.
+        Returns the envelope as JSON-encoded bytes.
         """
         if not callable(func):
             raise ValueError(f"Object {func} is not callable")
@@ -52,16 +49,35 @@ class TaskSerializer:
             "args": args,
             "kwargs": kwargs,
         }
-        return cloudpickle.dumps(task_data)
+        payload_bytes = cloudpickle.dumps(task_data)
+        
+        # Wrap payload in TaskEnvelope with hash
+        envelope = TaskEnvelope.wrap(payload_bytes)
+        
+        # Serialize envelope to JSON bytes
+        import json
+        envelope_dict = envelope.to_dict()
+        return json.dumps(envelope_dict).encode("utf-8")
 
     @staticmethod
     def deserialize(payload: bytes) -> Tuple[Callable, Tuple[Any, ...], Dict[str, Any]]:
         """
         Deserialize binary payload into (func, args, kwargs).
-        Raises ValueError if structure is invalid.
+        First unwraps the TaskEnvelope and verifies payload integrity.
+        Raises ValueError if structure is invalid or hash verification fails.
         """
         try:
-            task_data = cloudpickle.loads(payload)
+            import json
+            # Unwrap TaskEnvelope from JSON
+            envelope_dict = json.loads(payload.decode("utf-8"))
+            envelope = TaskEnvelope.from_dict(envelope_dict)
+            
+            # Verify integrity before deserializing
+            if not envelope.verify():
+                raise ValueError("TaskEnvelope integrity check failed: hash mismatch")
+            
+            # Now safely deserialize the cloudpickle payload
+            task_data = cloudpickle.loads(envelope.payload)
             if not isinstance(task_data, dict) or "func" not in task_data:
                 raise ValueError("Deserialized payload is not a valid MeshWeaver task dictionary")
             return task_data["func"], task_data.get("args", ()), task_data.get("kwargs", {})
@@ -81,19 +97,13 @@ class TaskSerializer:
         try:
             func, args, kwargs = cls.deserialize(payload)
 
-<<<<<<< HEAD
-=======
             # Check if function is an async coroutine
->>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             if inspect.iscoroutinefunction(func):
                 raw_result = await func(*args, **kwargs)
             else:
                 raw_result = func(*args, **kwargs)
 
-<<<<<<< HEAD
-=======
             # Serialize the return value using cloudpickle
->>>>>>> 884d6616f2f8d7f38f89eebeaae0f69dec0f2e0d
             result_bytes = cloudpickle.dumps(raw_result)
 
             return TaskResult(
