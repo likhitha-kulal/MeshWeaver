@@ -11,8 +11,10 @@ import unittest
 
 # Ensure workspace root is in python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from meshweaver.models import MessageType, NodeID
+from meshweaver.gossip import GossipManager
+from meshweaver.models import MessageType, NodeID, TaskResult
 from meshweaver.node import MeshNode
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
@@ -151,6 +153,35 @@ class TestWeek1(unittest.IsolatedAsyncioTestCase):
         finally:
             await node_a.stop()
             await node_b.stop()
+
+    def test_task_result_payload_hash_and_verification(self):
+        """TaskResult payload hashes should detect tampering."""
+        result = TaskResult(task_id="t-1", success=True, result_bytes=b"hello world")
+        self.assertIsNotNone(result.payload_hash)
+        self.assertTrue(result.verify_payload())
+
+        result.result_bytes = b"tampered"
+        self.assertFalse(result.verify_payload())
+
+    def test_gossip_manager_tracks_peer_load_and_dead_nodes(self):
+        """Gossip manager should store peer load snapshots and evict stale members."""
+        manager = GossipManager(node_id="node-a", heartbeat_interval=0.01, dead_node_timeout=0.1)
+        manager.register_neighbor("node-b", "127.0.0.1", 9001)
+
+        manager.receive_heartbeat({
+            "sender_id": "node-b",
+            "ip": "127.0.0.1",
+            "udp_port": 9001,
+            "cpu_percent": 42.0,
+            "ram_percent": 55.0,
+            "timestamp": 1000.0,
+        })
+
+        self.assertAlmostEqual(manager.peer_loads["node-b"].cpu_percent, 42.0)
+        manager.peer_loads["node-b"].timestamp = 0.0
+        evicted = manager.expire_dead_nodes(now=1000.2)
+        self.assertIn("node-b", evicted)
+        self.assertNotIn("node-b", manager.peer_loads)
 
 
 if __name__ == "__main__":

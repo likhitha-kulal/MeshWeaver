@@ -9,12 +9,20 @@ import os
 import sys
 import unittest
 
+# Ensure appropriate python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from meshweaver.kbucket import KBucket
-from meshweaver.models import MessageType, NodeID, NodeInfo
-from meshweaver.node import MeshNode
-from meshweaver.routing_table import RoutingTable
+try:
+    from meshweaver.kbucket import KBucket
+    from meshweaver.models import MessageType, NodeID, NodeInfo
+    from meshweaver.node import MeshNode
+    from meshweaver.routing_table import RoutingTable
+except ImportError:
+    from meshweaver.meshweaver.kbucket import KBucket
+    from meshweaver.meshweaver.models import MessageType, NodeID, NodeInfo
+    from meshweaver.meshweaver.node import MeshNode
+    from meshweaver.meshweaver.routing_table import RoutingTable
 
 
 class TestKBucket(unittest.TestCase):
@@ -89,7 +97,6 @@ class TestRoutingTable(unittest.TestCase):
         self.assertEqual(self.table.total_contacts(), 0)
 
     def test_find_closest_nodes_ordering(self):
-        # Create a set of contacts with distinct known distances
         contacts = []
         target_id = NodeID()
 

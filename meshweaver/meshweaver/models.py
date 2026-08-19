@@ -126,6 +126,7 @@ class MessageType(str, Enum):
     PONG = "PONG"
     FIND_NODE = "FIND_NODE"
     FIND_NODE_RESPONSE = "FIND_NODE_RESPONSE"
+    GOSSIP = "GOSSIP"
     TASK_EXECUTE = "TASK_EXECUTE"
     TASK_RESULT = "TASK_RESULT"
     ERROR = "ERROR"
@@ -176,6 +177,40 @@ class Message:
 
 
 @dataclass
+class TaskEnvelope:
+    """
+    Wraps a serialized task payload with a SHA-256 hash for integrity verification.
+    Prevents deserialization of corrupted or tampered payloads before cloudpickle.loads().
+    """
+    payload: bytes
+    sha256: str
+
+    @classmethod
+    def wrap(cls, payload: bytes) -> "TaskEnvelope":
+        """Create a TaskEnvelope by computing SHA-256 hash of the payload."""
+        return cls(payload=payload, sha256=hashlib.sha256(payload).hexdigest())
+
+    def verify(self) -> bool:
+        """Verify payload integrity by comparing computed hash with stored hash."""
+        return hashlib.sha256(self.payload).hexdigest() == self.sha256
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize envelope to JSON-serializable dict."""
+        return {
+            "payload": self.payload.hex(),
+            "sha256": self.sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TaskEnvelope":
+        """Reconstruct envelope from dict."""
+        return cls(
+            payload=bytes.fromhex(data["payload"]),
+            sha256=data["sha256"],
+        )
+
+
+@dataclass
 class TaskResult:
     """
     Encapsulates the output or error of a remote task execution.
@@ -186,8 +221,24 @@ class TaskResult:
     error_type: Optional[str] = None
     error_message: Optional[str] = None
     traceback: Optional[str] = None
+    payload_hash: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.result_bytes is not None and self.payload_hash is None:
+            self.payload_hash = self._compute_hash(self.result_bytes)
+
+    @staticmethod
+    def _compute_hash(payload: bytes) -> str:
+        return hashlib.sha256(payload).hexdigest()
+
+    def verify_payload(self) -> bool:
+        if self.result_bytes is None:
+            return self.payload_hash in (None, "")
+        return self.payload_hash == self._compute_hash(self.result_bytes)
 
     def to_dict(self) -> Dict[str, Any]:
+        if self.result_bytes is not None and self.payload_hash is None:
+            self.payload_hash = self._compute_hash(self.result_bytes)
         return {
             "task_id": self.task_id,
             "success": self.success,
@@ -195,16 +246,21 @@ class TaskResult:
             "error_type": self.error_type,
             "error_message": self.error_message,
             "traceback": self.traceback,
+            "payload_hash": self.payload_hash,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TaskResult":
         res_bytes = bytes.fromhex(data["result_bytes"]) if data.get("result_bytes") else None
-        return cls(
+        result = cls(
             task_id=data["task_id"],
             success=data["success"],
             result_bytes=res_bytes,
             error_type=data.get("error_type"),
             error_message=data.get("error_message"),
             traceback=data.get("traceback"),
+            payload_hash=data.get("payload_hash"),
         )
+        if result.result_bytes is not None and result.payload_hash is None:
+            result.payload_hash = result._compute_hash(result.result_bytes)
+        return result

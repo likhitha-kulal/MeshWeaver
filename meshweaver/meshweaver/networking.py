@@ -1,6 +1,6 @@
 """
 MeshWeaver Networking Protocol Implementation
-Provides UDP protocol (DatagramProtocol) for node discovery, PING-PONG RPCs, and FIND_NODE DHT routing,
+Provides UDP protocol (DatagramProtocol) for node discovery, PING-PONG RPCs, GOSSIP heartbeats, and FIND_NODE DHT routing,
 along with TCP server/client transport for reliable binary task execution transfer.
 """
 
@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 import struct
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from meshweaver.models import Message, MessageType, NodeID, NodeInfo, TaskResult
 from meshweaver.routing_table import RoutingTable
@@ -21,7 +21,7 @@ logger = logging.getLogger("meshweaver.networking")
 class UDPNodeProtocol(asyncio.DatagramProtocol):
     """
     Asyncio DatagramProtocol implementation for MeshWeaver UDP communication.
-    Handles ping/pong node discovery, routing table population, and FIND_NODE RPCs.
+    Handles ping/pong node discovery, routing table population, GOSSIP, and FIND_NODE RPCs.
     """
 
     def __init__(
@@ -29,10 +29,12 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         node_id: NodeID,
         tcp_port: int = 0,
         routing_table: Optional[RoutingTable] = None,
+        gossip_handler: Optional[Callable[[Dict[str, object]], None]] = None,
     ):
         self.node_id = node_id
         self.tcp_port = tcp_port
         self.routing_table = routing_table if routing_table is not None else RoutingTable(node_id)
+        self.gossip_handler = gossip_handler
         self.transport: Optional[asyncio.DatagramTransport] = None
         self._pending_requests: Dict[str, asyncio.Future[Message]] = {}
         self.local_udp_port: int = 0
@@ -68,6 +70,9 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
                 self._handle_ping(msg, addr)
             elif msg.type == MessageType.FIND_NODE:
                 self._handle_find_node(msg, addr)
+            elif msg.type == MessageType.GOSSIP:
+                if self.gossip_handler is not None:
+                    self.gossip_handler(msg.payload)
             elif msg.msg_id in self._pending_requests:
                 # Resolve pending RPC request future
                 fut = self._pending_requests.pop(msg.msg_id)
@@ -139,6 +144,17 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
             raise RuntimeError("UDP transport is not connected")
         payload_bytes = msg.to_json().encode("utf-8")
         self.transport.sendto(payload_bytes, (target_ip, target_port))
+
+    def send_gossip(self, target_ip: str, target_port: int, payload: Dict[str, object]) -> None:
+        """Broadcast a gossip heartbeat to a known neighbor."""
+        gossip_msg = Message(
+            type=MessageType.GOSSIP,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.local_udp_port,
+            sender_tcp_port=self.tcp_port,
+            payload=payload,
+        )
+        self.send_datagram(gossip_msg, target_ip, target_port)
 
     async def send_ping(self, target_ip: str, target_port: int, timeout: float = 5.0) -> Message:
         """
@@ -261,8 +277,8 @@ class TCPTaskServer:
             logger.info(f"[TCP RECV] Reading {payload_len} bytes task payload from {peer_addr}")
             task_payload = await reader.readexactly(payload_len)
 
-            # Execute task safely
-            task_result = await TaskSerializer.execute_task(task_payload)
+            # Verify payload integrity by checking TaskEnvelope hash before deserializing
+            task_result = await self._verify_and_execute(task_payload)
 
             # Serialize result to JSON string format
             result_json_bytes = json.dumps(task_result.to_dict()).encode("utf-8")
@@ -281,6 +297,44 @@ class TCPTaskServer:
         finally:
             writer.close()
             await writer.wait_closed()
+
+    async def _verify_and_execute(self, task_payload: bytes) -> TaskResult:
+        """
+        Verify TaskEnvelope integrity before executing.
+        Returns IntegrityError TaskResult if hash verification fails.
+        """
+        try:
+            from meshweaver.models import TaskEnvelope
+            
+            # Try parsing as JSON TaskEnvelope
+            try:
+                envelope_dict = json.loads(task_payload.decode("utf-8"))
+                if isinstance(envelope_dict, dict) and "sha256" in envelope_dict and "payload" in envelope_dict:
+                    envelope = TaskEnvelope.from_dict(envelope_dict)
+                    if not envelope.verify():
+                        logger.warning("[TCP INTEGRITY] TaskEnvelope hash verification failed")
+                        return TaskResult(
+                            task_id="unknown",
+                            success=False,
+                            error_type="IntegrityError",
+                            error_message="Task payload hash verification failed - possible corruption or tampering",
+                        )
+                    # Pass unwrapped binary payload
+                    return await TaskSerializer.execute_task(envelope.payload)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            
+            # Direct binary cloudpickle payload fallback
+            return await TaskSerializer.execute_task(task_payload)
+
+        except Exception as e:
+            logger.error(f"[TCP INTEGRITY] Unexpected error during verification/execution: {e}", exc_info=True)
+            return TaskResult(
+                task_id="unknown",
+                success=False,
+                error_type="IntegrityError",
+                error_message=f"Payload verification error: {str(e)}",
+            )
 
 
 class TCPTaskClient:
