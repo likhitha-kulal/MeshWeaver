@@ -1,9 +1,10 @@
 """
-MeshWeaver: A zero-dependency, pure Python peer-to-peer async task broker.
+MeshWeaver: A zero-dependency, pure Python peer-to-peer async compute mesh.
 """
 
+from meshweaver.gossip import GossipManager, PeerLoadSnapshot
 from meshweaver.kbucket import KBucket
-from meshweaver.models import Message, MessageType, NodeID, NodeInfo, TaskResult
+from meshweaver.models import Message, MessageType, NodeID, NodeInfo, TaskEnvelope, TaskResult
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.node import MeshNode
 from meshweaver.routing_table import RoutingTable
@@ -16,9 +17,12 @@ __all__ = [
     "NodeInfo",
     "MessageType",
     "Message",
+    "TaskEnvelope",
     "TaskResult",
     "KBucket",
     "RoutingTable",
+    "GossipManager",
+    "PeerLoadSnapshot",
     "UDPNodeProtocol",
     "TCPTaskServer",
     "TCPTaskClient",

@@ -1,5 +1,5 @@
 """
-MeshWeaver Node Entry Point
+MeshWeaver CLI Entry Point
 """
 
 import asyncio

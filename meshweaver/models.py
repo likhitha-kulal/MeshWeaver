@@ -1,6 +1,6 @@
 """
 MeshWeaver Data Models
-Defines Node identity, node metadata, message formats, and task execution payloads.
+Core data structures for node identification, routing, messaging, and task execution.
 """
 
 from dataclasses import dataclass, field
@@ -15,9 +15,8 @@ import uuid
 
 class NodeID:
     """
-    Represents a 160-bit Kademlia-compatible node identifier.
-    Stored internally as a 20-byte payload, providing XOR metric calculations
-    for DHT routing.
+    160-bit Kademlia-compatible node identifier.
+    Stored internally as a 20-byte payload with XOR distance metric calculations.
     """
 
     ID_BIT_LENGTH = 160
@@ -33,7 +32,6 @@ class NodeID:
         elif isinstance(value, int):
             self._bytes = value.to_bytes(self.ID_BYTE_LENGTH, byteorder="big")
         elif isinstance(value, str):
-            # Parse hex string
             clean_hex = value.strip().lower()
             if len(clean_hex) != self.ID_BYTE_LENGTH * 2:
                 raise ValueError(f"Hex NodeID string must be {self.ID_BYTE_LENGTH * 2} characters")
@@ -43,7 +41,7 @@ class NodeID:
 
     @classmethod
     def from_string_hash(cls, source: str) -> "NodeID":
-        """Generate a NodeID from the SHA-1 hash of a string (e.g. host:port or key)."""
+        """Generate a NodeID from the SHA-1 hash of a string."""
         digest = hashlib.sha1(source.encode("utf-8")).digest()
         return cls(digest)
 
@@ -59,7 +57,7 @@ class NodeID:
         return self._bytes.hex()
 
     def distance(self, other: "NodeID") -> int:
-        """Calculate Kademlia XOR distance metric between two NodeIDs."""
+        """Calculate XOR distance metric between two NodeIDs."""
         return self.int ^ other.int
 
     def __eq__(self, other: object) -> bool:
@@ -81,7 +79,7 @@ class NodeID:
 
 @dataclass
 class NodeInfo:
-    """Contact information for a peer node."""
+    """Network contact metadata for a peer node."""
     node_id: NodeID
     ip: str
     udp_port: int
@@ -121,7 +119,7 @@ class NodeInfo:
 
 
 class MessageType(str, Enum):
-    """Supported RPC and control message types."""
+    """RPC and network control message types."""
     PING = "PING"
     PONG = "PONG"
     FIND_NODE = "FIND_NODE"
@@ -134,11 +132,9 @@ class MessageType(str, Enum):
 
 @dataclass
 class Message:
-    """
-    Control/RPC message for UDP datagram communication.
-    """
+    """Network datagram message container."""
     type: MessageType
-    sender_id: str  # Hex string of NodeID
+    sender_id: str
     sender_udp_port: int
     sender_tcp_port: int = 0
     msg_id: str = field(default_factory=lambda: str(uuid.uuid4()))
@@ -179,23 +175,22 @@ class Message:
 @dataclass
 class TaskEnvelope:
     """
-    Wraps a serialized task payload with a SHA-256 hash for integrity verification.
-    Prevents deserialization of corrupted or tampered payloads before cloudpickle.loads().
+    Integrity envelope wrapping serialized task payloads with SHA-256 checksums.
+    Prevents execution of corrupted or tampered code.
     """
     payload: bytes
     sha256: str
 
     @classmethod
     def wrap(cls, payload: bytes) -> "TaskEnvelope":
-        """Create a TaskEnvelope by computing SHA-256 hash of the payload."""
+        """Compute SHA-256 checksum and package into envelope."""
         return cls(payload=payload, sha256=hashlib.sha256(payload).hexdigest())
 
     def verify(self) -> bool:
-        """Verify payload integrity by comparing computed hash with stored hash."""
+        """Verify checksum integrity against payload."""
         return hashlib.sha256(self.payload).hexdigest() == self.sha256
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize envelope to JSON-serializable dict."""
         return {
             "payload": self.payload.hex(),
             "sha256": self.sha256,
@@ -203,7 +198,6 @@ class TaskEnvelope:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TaskEnvelope":
-        """Reconstruct envelope from dict."""
         return cls(
             payload=bytes.fromhex(data["payload"]),
             sha256=data["sha256"],
@@ -212,9 +206,7 @@ class TaskEnvelope:
 
 @dataclass
 class TaskResult:
-    """
-    Encapsulates the output or error of a remote task execution.
-    """
+    """Encapsulates output, status, and error diagnostics from a task execution."""
     task_id: str
     success: bool
     result_bytes: Optional[bytes] = None

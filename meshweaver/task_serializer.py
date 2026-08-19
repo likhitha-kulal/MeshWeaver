@@ -1,7 +1,6 @@
 """
 MeshWeaver Task Serializer
-Handles cloudpickle serialization/deserialization of arbitrary Python functions,
-arguments, execution results, and remote error handling.
+Cloudpickle-based task serialization engine with SHA-256 integrity envelopes and async execution support.
 """
 
 import asyncio
@@ -13,37 +12,35 @@ from typing import Any, Callable, Dict, Tuple
 import uuid
 
 import cloudpickle
-from meshweaver.models import TaskResult, TaskEnvelope
+from meshweaver.models import TaskEnvelope, TaskResult
 
 
 class RemoteExecutionError(Exception):
-    """Raised when a remotely executed task raises an unhandled exception."""
+    """Raised when a remote task fails during execution."""
 
     def __init__(self, error_type: str, error_message: str, remote_traceback: str):
         self.error_type = error_type
         self.error_message = error_message
         self.remote_traceback = remote_traceback
         super().__init__(
-            f"Remote task execution failed with {error_type}: {error_message}\n"
+            f"Remote task failed with {error_type}: {error_message}\n"
             f"--- Remote Traceback ---\n{remote_traceback}"
         )
 
 
 class TaskSerializer:
     """
-    Utility class for serializing, deserializing, executing Python tasks,
-    and packing/unpacking results safely across node boundaries.
+    Serializes, deserializes, and executes Python functions across distributed mesh nodes.
     """
 
     @staticmethod
     def serialize(func: Callable, *args: Any, **kwargs: Any) -> bytes:
         """
-        Serialize a Python function along with its positional and keyword arguments.
-        Wraps the cloudpickled payload in a TaskEnvelope with SHA-256 integrity hash.
-        Returns the envelope as JSON-encoded bytes.
+        Serialize a Python callable and its arguments.
+        Wraps payload inside an integrity-checked TaskEnvelope.
         """
         if not callable(func):
-            raise ValueError(f"Object {func} is not callable")
+            raise ValueError(f"Target {func} is not callable")
 
         task_data = {
             "func": func,
@@ -51,23 +48,16 @@ class TaskSerializer:
             "kwargs": kwargs,
         }
         payload_bytes = cloudpickle.dumps(task_data)
-        
-        # Wrap payload in TaskEnvelope with hash
         envelope = TaskEnvelope.wrap(payload_bytes)
-        
-        # Serialize envelope to JSON bytes
-        envelope_dict = envelope.to_dict()
-        return json.dumps(envelope_dict).encode("utf-8")
+        return json.dumps(envelope.to_dict()).encode("utf-8")
 
     @staticmethod
     def deserialize(payload: bytes) -> Tuple[Callable, Tuple[Any, ...], Dict[str, Any]]:
         """
-        Deserialize binary payload into (func, args, kwargs).
-        First unwraps the TaskEnvelope and verifies payload integrity.
-        Raises ValueError if structure is invalid or hash verification fails.
+        Deserialize payload into (func, args, kwargs).
+        Verifies TaskEnvelope hash before passing to cloudpickle.
         """
         try:
-            # Try unpacking TaskEnvelope from JSON
             try:
                 json_str = payload.decode("utf-8")
                 envelope_dict = json.loads(json_str)
@@ -81,10 +71,9 @@ class TaskSerializer:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 task_bytes = payload
 
-            # Safely deserialize the cloudpickle payload
             task_data = cloudpickle.loads(task_bytes)
             if not isinstance(task_data, dict) or "func" not in task_data:
-                raise ValueError("Deserialized payload is not a valid MeshWeaver task dictionary")
+                raise ValueError("Deserialized payload is not a valid task specification")
             return task_data["func"], task_data.get("args", ()), task_data.get("kwargs", {})
         except Exception as e:
             raise ValueError(f"Failed to deserialize task payload: {e}") from e
@@ -92,9 +81,8 @@ class TaskSerializer:
     @classmethod
     async def execute_task(cls, payload: bytes, task_id: str = "") -> TaskResult:
         """
-        Deserialize payload, execute the function (handling async coroutines if needed),
-        and return a TaskResult object containing either the cloudpickled result
-        or encapsulated error metadata.
+        Execute task safely in the local event loop.
+        Supports both standard functions and async coroutine functions.
         """
         if not task_id:
             task_id = str(uuid.uuid4())
@@ -102,15 +90,12 @@ class TaskSerializer:
         try:
             func, args, kwargs = cls.deserialize(payload)
 
-            # Check if function is an async coroutine
             if inspect.iscoroutinefunction(func):
                 raw_result = await func(*args, **kwargs)
             else:
                 raw_result = func(*args, **kwargs)
 
-            # Serialize the return value using cloudpickle
             result_bytes = cloudpickle.dumps(raw_result)
-
             return TaskResult(
                 task_id=task_id,
                 success=True,
@@ -121,10 +106,8 @@ class TaskSerializer:
             exc_type, exc_val, exc_tb = sys.exc_info()
             tb_str = "".join(traceback.format_exception(exc_type, exc_val, exc_tb))
             err_msg = str(err)
-            if "hash mismatch" in err_msg.lower() or "integrity" in err_msg.lower():
-                err_type = "IntegrityError"
-            else:
-                err_type = type(err).__name__
+            err_type = "IntegrityError" if "hash mismatch" in err_msg.lower() else type(err).__name__
+
             return TaskResult(
                 task_id=task_id,
                 success=False,
@@ -135,10 +118,7 @@ class TaskSerializer:
 
     @staticmethod
     def unpack_result(task_result: TaskResult) -> Any:
-        """
-        Unpack a TaskResult. Returns the deserialized output if successful,
-        or raises RemoteExecutionError if remote execution failed.
-        """
+        """Unpack execution result or raise RemoteExecutionError."""
         if task_result.success:
             if task_result.result_bytes is None:
                 return None
@@ -147,5 +127,5 @@ class TaskSerializer:
             raise RemoteExecutionError(
                 error_type=task_result.error_type or "UnknownError",
                 error_message=task_result.error_message or "No error message provided",
-                remote_traceback=task_result.traceback or "No remote traceback available",
+                remote_traceback=task_result.traceback or "No traceback available",
             )

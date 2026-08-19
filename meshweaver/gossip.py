@@ -1,4 +1,7 @@
-"""Lightweight peer-health gossip for MeshWeaver nodes."""
+"""
+MeshWeaver Gossip Protocol
+Decentralized peer-health gossip broadcaster and node load balancer.
+"""
 
 import asyncio
 import logging
@@ -27,8 +30,7 @@ def _read_ram_percent() -> float:
 
 @dataclass
 class PeerLoadSnapshot:
-    """Last observed health snapshot for a known neighbor."""
-
+    """Resource utilization snapshot of a known peer."""
     node_id: str
     ip: str
     udp_port: int
@@ -38,7 +40,7 @@ class PeerLoadSnapshot:
 
 
 class GossipManager:
-    """Periodic heartbeat broadcaster and local peer-load view."""
+    """Periodic gossip heartbeat manager and peer load table."""
 
     def __init__(
         self,
@@ -81,14 +83,13 @@ class GossipManager:
         self.peer_loads.setdefault(node_id, PeerLoadSnapshot(node_id=node_id, ip=host, udp_port=udp_port))
 
     def build_heartbeat(self) -> Dict[str, Any]:
-        now = time.time()
         return {
             "sender_id": self.node_id,
             "ip": self.host,
             "udp_port": self.udp_port,
             "cpu_percent": _read_cpu_percent(),
             "ram_percent": _read_ram_percent(),
-            "timestamp": now,
+            "timestamp": time.time(),
         }
 
     async def start(self) -> None:
@@ -114,7 +115,7 @@ class GossipManager:
                 await self._broadcast_heartbeat()
                 self.expire_dead_nodes()
         except asyncio.CancelledError:
-            logger.info("Gossip heartbeat loop cancelled")
+            logger.debug("Gossip loop terminated")
 
     async def _broadcast_heartbeat(self) -> None:
         if self._network_send is None:
@@ -123,8 +124,8 @@ class GossipManager:
         for node_id, (host, port) in self.neighbors.items():
             try:
                 self._network_send(host, port, payload)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Failed to send gossip to %s: %s", node_id, exc)
+            except Exception as exc:
+                logger.warning(f"Failed to send gossip to {node_id}: {exc}")
 
     def receive_heartbeat(self, payload: Dict[str, Any]) -> None:
         try:
@@ -147,7 +148,7 @@ class GossipManager:
             )
             self.neighbors.setdefault(sender_id, (ip, udp_port))
         except (TypeError, ValueError):
-            logger.warning("Ignoring malformed gossip heartbeat: %s", payload)
+            logger.warning(f"Ignoring malformed gossip heartbeat: {payload}")
 
     def expire_dead_nodes(self, now: Optional[float] = None) -> List[str]:
         if now is None:
@@ -163,14 +164,10 @@ class GossipManager:
         return dead
 
     def get_least_loaded_peer(self) -> Optional[PeerLoadSnapshot]:
-        """
-        Return the peer with the lowest combined CPU and RAM load.
-        Returns None if no peers are available.
-        """
+        """Return the peer with lowest combined CPU and RAM utilization score."""
         if not self.peer_loads:
             return None
-        # Sort by load score with deterministic tie-breaking on node_id
         return min(
             self.peer_loads.values(),
-            key=lambda snapshot: (snapshot.cpu_percent + snapshot.ram_percent, snapshot.node_id),
+            key=lambda s: (s.cpu_percent + s.ram_percent, s.node_id),
         )
