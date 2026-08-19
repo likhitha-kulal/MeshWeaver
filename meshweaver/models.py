@@ -1,6 +1,6 @@
 """
-MeshWeaver Data Models (Networking & Infra Track)
-Defines Node identity, node metadata, and UDP Message formats.
+MeshWeaver Data Models
+Core data structures for node identification, routing, messaging, and task execution.
 """
 
 from dataclasses import dataclass, field
@@ -15,9 +15,8 @@ import uuid
 
 class NodeID:
     """
-    Represents a 160-bit Kademlia-compatible node identifier.
-    Stored internally as a 20-byte payload, providing XOR metric calculations
-    for DHT routing.
+    160-bit Kademlia-compatible node identifier.
+    Stored internally as a 20-byte payload with XOR distance metric calculations.
     """
 
     ID_BIT_LENGTH = 160
@@ -58,7 +57,7 @@ class NodeID:
         return self._bytes.hex()
 
     def distance(self, other: "NodeID") -> int:
-        """Calculate Kademlia XOR distance metric between two NodeIDs."""
+        """Calculate XOR distance metric between two NodeIDs."""
         return self.int ^ other.int
 
     def __eq__(self, other: object) -> bool:
@@ -80,7 +79,7 @@ class NodeID:
 
 @dataclass
 class NodeInfo:
-    """Contact information for a peer node."""
+    """Network contact metadata for a peer node."""
     node_id: NodeID
     ip: str
     udp_port: int
@@ -120,22 +119,24 @@ class NodeInfo:
 
 
 class MessageType(str, Enum):
-    """Supported RPC and control message types."""
+    """RPC and network control message types."""
     PING = "PING"
     PONG = "PONG"
     FIND_NODE = "FIND_NODE"
     FIND_NODE_RESPONSE = "FIND_NODE_RESPONSE"
+    GOSSIP = "GOSSIP"
+    TASK_EXECUTE = "TASK_EXECUTE"
+    TASK_RESULT = "TASK_RESULT"
     ERROR = "ERROR"
 
 
 @dataclass
 class Message:
-    """
-    Control/RPC message for UDP datagram communication.
-    """
+    """Network datagram message container."""
     type: MessageType
-    sender_id: str  # Hex string of NodeID
+    sender_id: str
     sender_udp_port: int
+    sender_tcp_port: int = 0
     msg_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     payload: Dict[str, Any] = field(default_factory=dict)
     timestamp: float = field(default_factory=time.time)
@@ -146,6 +147,7 @@ class Message:
             "type": self.type.value if isinstance(self.type, MessageType) else str(self.type),
             "sender_id": self.sender_id,
             "sender_udp_port": self.sender_udp_port,
+            "sender_tcp_port": self.sender_tcp_port,
             "payload": self.payload,
             "timestamp": self.timestamp,
         }
@@ -160,6 +162,7 @@ class Message:
             type=MessageType(data["type"]),
             sender_id=data["sender_id"],
             sender_udp_port=int(data["sender_udp_port"]),
+            sender_tcp_port=int(data.get("sender_tcp_port", 0)),
             payload=data.get("payload", {}),
             timestamp=float(data.get("timestamp", time.time())),
         )
@@ -167,3 +170,89 @@ class Message:
     @classmethod
     def from_json(cls, json_str: str) -> "Message":
         return cls.from_dict(json.loads(json_str))
+
+
+@dataclass
+class TaskEnvelope:
+    """
+    Integrity envelope wrapping serialized task payloads with SHA-256 checksums.
+    Prevents execution of corrupted or tampered code.
+    """
+    payload: bytes
+    sha256: str
+
+    @classmethod
+    def wrap(cls, payload: bytes) -> "TaskEnvelope":
+        """Compute SHA-256 checksum and package into envelope."""
+        return cls(payload=payload, sha256=hashlib.sha256(payload).hexdigest())
+
+    def verify(self) -> bool:
+        """Verify checksum integrity against payload."""
+        return hashlib.sha256(self.payload).hexdigest() == self.sha256
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "payload": self.payload.hex(),
+            "sha256": self.sha256,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TaskEnvelope":
+        return cls(
+            payload=bytes.fromhex(data["payload"]),
+            sha256=data["sha256"],
+        )
+
+
+@dataclass
+class TaskResult:
+    """Encapsulates output, status, and error diagnostics from a task execution."""
+    task_id: str
+    success: bool
+    result_bytes: Optional[bytes] = None
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+    traceback: Optional[str] = None
+    payload_hash: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.result_bytes is not None and self.payload_hash is None:
+            self.payload_hash = self._compute_hash(self.result_bytes)
+
+    @staticmethod
+    def _compute_hash(payload: bytes) -> str:
+        return hashlib.sha256(payload).hexdigest()
+
+    def verify_payload(self) -> bool:
+        if self.result_bytes is None:
+            return self.payload_hash in (None, "")
+        return self.payload_hash == self._compute_hash(self.result_bytes)
+
+    def to_dict(self) -> Dict[str, Any]:
+        if self.result_bytes is not None and self.payload_hash is None:
+            self.payload_hash = self._compute_hash(self.result_bytes)
+        return {
+            "task_id": self.task_id,
+            "success": self.success,
+            "result_bytes": self.result_bytes.hex() if self.result_bytes else None,
+            "error_type": self.error_type,
+            "error_message": self.error_message,
+            "traceback": self.traceback,
+            "payload_hash": self.payload_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TaskResult":
+        res_bytes = bytes.fromhex(data["result_bytes"]) if data.get("result_bytes") else None
+        result = cls(
+            task_id=data["task_id"],
+            success=data["success"],
+            result_bytes=res_bytes,
+            error_type=data.get("error_type"),
+            error_message=data.get("error_message"),
+            traceback=data.get("traceback"),
+            payload_hash=data.get("payload_hash"),
+        )
+        if result.result_bytes is not None and result.payload_hash is None:
+            result.payload_hash = result._compute_hash(result.result_bytes)
+        return result

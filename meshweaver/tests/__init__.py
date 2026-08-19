@@ -1,3 +1,3 @@
 """
-MeshWeaver Tests Package
+MeshWeaver Unit & Integration Tests
 """

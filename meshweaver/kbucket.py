@@ -1,6 +1,6 @@
 """
-MeshWeaver K-Bucket Implementation
-Manages a fixed-capacity list (k=20) of peer node contacts ordered by time last seen.
+MeshWeaver K-Bucket
+Maintains a fixed-capacity contact list (k=20) ordered by time last seen (LRU eviction).
 """
 
 import time
@@ -11,7 +11,7 @@ from meshweaver.models import NodeID, NodeInfo
 
 class KBucket:
     """
-    Represents a single K-Bucket in the Kademlia routing table.
+    Single K-Bucket in the routing table.
     Holds up to `k` contacts sorted from least-recently-seen (head)
     to most-recently-seen (tail).
     """
@@ -24,23 +24,23 @@ class KBucket:
 
     @property
     def nodes(self) -> List[NodeInfo]:
-        """Return a copy of the list of active contacts."""
+        """Return active contacts list."""
         return list(self.contacts)
 
     def is_full(self) -> bool:
-        """Check if the bucket has reached capacity k."""
+        """Check if bucket is at capacity."""
         return len(self.contacts) >= self.k
 
     def head(self) -> Optional[NodeInfo]:
-        """Return the least-recently-seen contact (head of bucket)."""
+        """Return least-recently-seen contact."""
         return self.contacts[0] if self.contacts else None
 
     def tail(self) -> Optional[NodeInfo]:
-        """Return the most-recently-seen contact (tail of bucket)."""
+        """Return most-recently-seen contact."""
         return self.contacts[-1] if self.contacts else None
 
     def get(self, node_id: NodeID) -> Optional[NodeInfo]:
-        """Retrieve contact with matching NodeID if present in bucket."""
+        """Retrieve contact with matching NodeID if present."""
         for contact in self.contacts:
             if contact.node_id == node_id:
                 return contact
@@ -48,34 +48,32 @@ class KBucket:
 
     def add(self, node_info: NodeInfo) -> bool:
         """
-        Add or update a node contact in the bucket.
-        - If node is already present: move to tail (most recently seen) and update timestamp. Returns True.
-        - If node is not present and bucket is not full: append to tail. Returns True.
-        - If bucket is full: add to replacement cache if not already present. Returns False.
+        Add or refresh a contact in the bucket.
+        - Existing node: moved to tail and timestamp refreshed. Returns True.
+        - Space available: appended to tail. Returns True.
+        - Bucket full: stored in replacement cache. Returns False.
         """
         self.last_updated = time.time()
         node_info.last_seen = self.last_updated
 
-        # 1. Existing node in primary contacts
+        # 1. Refresh existing contact
         for idx, contact in enumerate(self.contacts):
             if contact.node_id == node_info.node_id:
-                # Remove from current position and move to tail
                 self.contacts.pop(idx)
                 self.contacts.append(node_info)
                 return True
 
-        # 2. Bucket has space
+        # 2. Append if space available
         if len(self.contacts) < self.k:
             self.contacts.append(node_info)
             return True
 
-        # 3. Bucket is full -> put into replacement cache
+        # 3. Bucket full -> add to replacement cache
         for idx, candidate in enumerate(self.replacement_cache):
             if candidate.node_id == node_info.node_id:
                 self.replacement_cache.pop(idx)
                 break
         self.replacement_cache.append(node_info)
-        # Cap replacement cache size to k
         if len(self.replacement_cache) > self.k:
             self.replacement_cache.pop(0)
         return False
@@ -83,7 +81,7 @@ class KBucket:
     def remove(self, node_id: NodeID) -> Optional[NodeInfo]:
         """
         Remove contact from the bucket.
-        If replacement cache has candidates, promote the first candidate into the bucket.
+        Promotes oldest replacement candidate if present.
         """
         removed_contact: Optional[NodeInfo] = None
         for idx, contact in enumerate(self.contacts):
@@ -91,10 +89,8 @@ class KBucket:
                 removed_contact = self.contacts.pop(idx)
                 break
 
-        # Also remove from replacement cache if present
         self.replacement_cache = [c for c in self.replacement_cache if c.node_id != node_id]
 
-        # Promote from replacement cache if available
         if removed_contact and self.replacement_cache and len(self.contacts) < self.k:
             promoted = self.replacement_cache.pop(0)
             self.contacts.append(promoted)
