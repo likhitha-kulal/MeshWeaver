@@ -62,6 +62,8 @@ class NodeID:
         return self.int ^ other.int
 
     def __eq__(self, other: object) -> bool:
+        if isinstance(other, NodeInfo):
+            return self._bytes == other.node_id._bytes
         if not isinstance(other, NodeID):
             return False
         return self._bytes == other._bytes
@@ -82,13 +84,19 @@ class NodeInfo:
     node_id: NodeID
     ip: str
     udp_port: int
+    tcp_port: Optional[int] = None
+    last_seen: float = field(default_factory=time.time)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "node_id": self.node_id.hex(),
             "ip": self.ip,
             "udp_port": self.udp_port,
+            "last_seen": self.last_seen,
         }
+        if self.tcp_port is not None:
+            data["tcp_port"] = self.tcp_port
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "NodeInfo":
@@ -96,13 +104,27 @@ class NodeInfo:
             node_id=NodeID(data["node_id"]),
             ip=data["ip"],
             udp_port=int(data["udp_port"]),
+            tcp_port=int(data["tcp_port"]) if data.get("tcp_port") is not None else None,
+            last_seen=float(data.get("last_seen", time.time())),
         )
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, NodeID):
+            return self.node_id == other
+        if not isinstance(other, NodeInfo):
+            return False
+        return self.node_id == other.node_id
+
+    def __hash__(self) -> int:
+        return hash(self.node_id)
 
 
 class MessageType(str, Enum):
     """Supported RPC and control message types."""
     PING = "PING"
     PONG = "PONG"
+    FIND_NODE = "FIND_NODE"
+    FIND_NODE_RESPONSE = "FIND_NODE_RESPONSE"
     ERROR = "ERROR"
 
 
