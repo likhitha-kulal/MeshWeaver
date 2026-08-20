@@ -205,3 +205,5 @@ def unpack_heartbeat_payload(payload: dict) -> dict:
 # Event hooks for node eviction notification
 
 # Background task for removing expired nodes from memory table
+
+# Aggregate cluster status and peer count utilities
