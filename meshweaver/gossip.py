@@ -171,3 +171,9 @@ class GossipManager:
             self.peer_loads.values(),
             key=lambda s: (s.cpu_percent + s.ram_percent, s.node_id),
         )
+
+
+# Helper: Snapshot validation and load scoring
+def compute_load_score(snapshot: PeerLoadSnapshot) -> float:
+    """Compute normalized composite load index (0.0 to 1.0)."""
+    return (snapshot.cpu_percent * 0.6 + snapshot.ram_percent * 0.4) / 100.0
