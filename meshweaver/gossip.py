@@ -189,3 +189,7 @@ def compute_load_score(snapshot: PeerLoadSnapshot) -> float:
 def pack_heartbeat_payload(node_id: str, host: str, udp_port: int, cpu: float, ram: float, tcp_port: int = 0) -> dict:
     """Serialize node health and telemetry into standardized gossip payload."""
     return {"type": "GOSSIP_HEARTBEAT", "node_id": node_id, "host": host, "udp_port": udp_port, "tcp_port": tcp_port, "cpu": cpu, "ram": ram, "timestamp": time.time()}
+
+def unpack_heartbeat_payload(payload: dict) -> dict:
+    """Validate and parse received gossip heartbeat dictionary."""
+    return {"node_id": payload.get("node_id", ""), "host": payload.get("host", "127.0.0.1"), "udp_port": int(payload.get("udp_port", 0)), "tcp_port": int(payload.get("tcp_port", 0)), "cpu": float(payload.get("cpu", 0.0)), "ram": float(payload.get("ram", 0.0)), "timestamp": float(payload.get("timestamp", time.time()))}
