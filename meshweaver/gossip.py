@@ -201,3 +201,5 @@ def unpack_heartbeat_payload(payload: dict) -> dict:
 # Automatic peer record refresh on heartbeat arrival
 
 # Node liveness deadline checking and dead node marking
+
+# Event hooks for node eviction notification
