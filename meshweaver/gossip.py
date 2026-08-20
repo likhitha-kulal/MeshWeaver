@@ -181,3 +181,5 @@ def compute_load_score(snapshot: PeerLoadSnapshot) -> float:
 # Enhanced GossipManager type annotations and telemetry parameters
 
 # Neighbor registration deduplication and active link validation
+
+# Peer load retrieval and contact resolution helpers
