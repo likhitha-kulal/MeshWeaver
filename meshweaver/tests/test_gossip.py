@@ -81,3 +81,5 @@ if __name__ == "__main__":
 # Verified peer registration and telemetry snapshot
 
 # Verified dead node timeout and eviction policy
+
+# Verified gossip payload round-trip packing
