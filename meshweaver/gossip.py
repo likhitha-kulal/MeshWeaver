@@ -199,3 +199,5 @@ def unpack_heartbeat_payload(payload: dict) -> dict:
 # Jitter calculation helper for gossip broadcast dispersion
 
 # Automatic peer record refresh on heartbeat arrival
+
+# Node liveness deadline checking and dead node marking
