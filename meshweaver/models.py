@@ -256,3 +256,10 @@ class TaskResult:
         if result.result_bytes is not None and result.payload_hash is None:
             result.payload_hash = result._compute_hash(result.result_bytes)
         return result
+
+
+class PeerStatus(str, Enum):
+    """Node lifecycle and health status."""
+    ALIVE = "ALIVE"
+    SUSPECT = "SUSPECT"
+    DEAD = "DEAD"
