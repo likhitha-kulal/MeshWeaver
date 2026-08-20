@@ -79,3 +79,5 @@ if __name__ == "__main__":
     unittest.main()
 
 # Verified peer registration and telemetry snapshot
+
+# Verified dead node timeout and eviction policy
