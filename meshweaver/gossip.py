@@ -195,3 +195,5 @@ def unpack_heartbeat_payload(payload: dict) -> dict:
     return {"node_id": payload.get("node_id", ""), "host": payload.get("host", "127.0.0.1"), "udp_port": int(payload.get("udp_port", 0)), "tcp_port": int(payload.get("tcp_port", 0)), "cpu": float(payload.get("cpu", 0.0)), "ram": float(payload.get("ram", 0.0)), "timestamp": float(payload.get("timestamp", time.time()))}
 
 # Heartbeat broadcast loop lifecycle monitor
+
+# Jitter calculation helper for gossip broadcast dispersion
