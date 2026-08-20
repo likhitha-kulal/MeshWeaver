@@ -179,3 +179,5 @@ def compute_load_score(snapshot: PeerLoadSnapshot) -> float:
     return (snapshot.cpu_percent * 0.6 + snapshot.ram_percent * 0.4) / 100.0
 
 # Enhanced GossipManager type annotations and telemetry parameters
+
+# Neighbor registration deduplication and active link validation
