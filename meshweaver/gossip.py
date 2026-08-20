@@ -177,3 +177,5 @@ class GossipManager:
 def compute_load_score(snapshot: PeerLoadSnapshot) -> float:
     """Compute normalized composite load index (0.0 to 1.0)."""
     return (snapshot.cpu_percent * 0.6 + snapshot.ram_percent * 0.4) / 100.0
+
+# Enhanced GossipManager type annotations and telemetry parameters
