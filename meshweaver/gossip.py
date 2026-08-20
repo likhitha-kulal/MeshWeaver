@@ -183,3 +183,5 @@ def compute_load_score(snapshot: PeerLoadSnapshot) -> float:
 # Neighbor registration deduplication and active link validation
 
 # Peer load retrieval and contact resolution helpers
+
+# Strict TTL expiration threshold verification
