@@ -203,3 +203,5 @@ def unpack_heartbeat_payload(payload: dict) -> dict:
 # Node liveness deadline checking and dead node marking
 
 # Event hooks for node eviction notification
+
+# Background task for removing expired nodes from memory table
