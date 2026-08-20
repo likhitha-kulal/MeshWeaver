@@ -207,3 +207,5 @@ def unpack_heartbeat_payload(payload: dict) -> dict:
 # Background task for removing expired nodes from memory table
 
 # Aggregate cluster status and peer count utilities
+
+# Thread safety primitives and locked updates
