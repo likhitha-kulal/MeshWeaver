@@ -197,3 +197,5 @@ def unpack_heartbeat_payload(payload: dict) -> dict:
 # Heartbeat broadcast loop lifecycle monitor
 
 # Jitter calculation helper for gossip broadcast dispersion
+
+# Automatic peer record refresh on heartbeat arrival
