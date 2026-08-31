@@ -2,6 +2,7 @@
 MeshWeaver: A zero-dependency, pure Python peer-to-peer async compute mesh.
 """
 
+from meshweaver.batch_executor import BatchMetrics, ParallelBatchExecutor, chunk_iterable
 from meshweaver.gossip import GossipManager, PeerLoadSnapshot
 from meshweaver.dht_storage import DHTStorage
 from meshweaver.kbucket import KBucket
@@ -10,9 +11,17 @@ from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.node import MeshNode
 from meshweaver.node_lookup import NodeLookup
 from meshweaver.routing_table import RoutingTable
+from meshweaver.scheduler import (
+    LoadScorer,
+    RetryPolicy,
+    SchedulingPolicy,
+    TaskScheduler,
+    WorkerCandidate,
+)
+from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "NodeID",
@@ -33,4 +42,14 @@ __all__ = [
     "MeshNode",
     "NodeLookup",
     "DHTStorage",
+    "TaskScheduler",
+    "SchedulingPolicy",
+    "RetryPolicy",
+    "LoadScorer",
+    "WorkerCandidate",
+    "TaskCache",
+    "ParallelBatchExecutor",
+    "BatchMetrics",
+    "chunk_iterable",
 ]
+
