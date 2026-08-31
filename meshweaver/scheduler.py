@@ -56,3 +56,14 @@ class LoadScorer:
         penalty = self.pending_task_weight * max(0, pending_tasks)
         return round(base_score + penalty, 3)
 
+    def is_overloaded(
+        self,
+        cpu_percent: float,
+        ram_percent: float,
+        cpu_threshold: float = 90.0,
+        ram_threshold: float = 95.0,
+    ) -> bool:
+        """Return True if worker resource utilization exceeds critical thresholds."""
+        return cpu_percent >= cpu_threshold or ram_percent >= ram_threshold
+
+
