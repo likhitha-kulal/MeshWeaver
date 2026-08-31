@@ -27,3 +27,32 @@ class RetryPolicy:
     backoff_factor: float = 0.5
     timeout_per_attempt: float = 5.0
     exclude_failed_nodes: bool = True
+
+
+class LoadScorer:
+    """Calculates load metrics for candidate compute workers."""
+
+    def __init__(
+        self,
+        cpu_weight: float = 0.6,
+        ram_weight: float = 0.4,
+        pending_task_weight: float = 5.0,
+    ):
+        self.cpu_weight = cpu_weight
+        self.ram_weight = ram_weight
+        self.pending_task_weight = pending_task_weight
+
+    def calculate_score(
+        self,
+        cpu_percent: float,
+        ram_percent: float,
+        pending_tasks: int = 0,
+    ) -> float:
+        """
+        Compute weighted composite load index (lower is better/less busy).
+        Formula: (cpu_w * CPU%) + (ram_w * RAM%) + (task_w * pending_tasks)
+        """
+        base_score = (self.cpu_weight * cpu_percent) + (self.ram_weight * ram_percent)
+        penalty = self.pending_task_weight * max(0, pending_tasks)
+        return round(base_score + penalty, 3)
+
