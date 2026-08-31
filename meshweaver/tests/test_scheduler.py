@@ -99,19 +99,20 @@ class TestRetryPolicyAndFailover(unittest.IsolatedAsyncioTestCase):
             default_retry_policy=RetryPolicy(max_retries=2, backoff_factor=0.01, exclude_failed_nodes=True),
         )
 
-        from meshweaver.models import TaskResult, TaskStatus
+        import cloudpickle
+        from meshweaver.models import TaskResult
         # First attempt on node_a fails with ConnectionRefusedError, second on node_b succeeds
         success_result = TaskResult(
             task_id="t1",
-            status=TaskStatus.COMPLETED,
-            return_value="recovered_value",
-            execution_time=0.01,
+            success=True,
+            result_bytes=cloudpickle.dumps("recovered_value"),
         )
         mock_send_task.side_effect = [ConnectionRefusedError("Node down"), success_result]
 
         res = await scheduler.dispatch_task(lambda: "test", fallback_local=False)
         self.assertEqual(res, "recovered_value")
         self.assertEqual(mock_send_task.call_count, 2)
+
 
 
 
