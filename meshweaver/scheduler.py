@@ -145,6 +145,13 @@ class TaskScheduler:
 
         return candidates
 
+    def _select_least_loaded(self, candidates: List[WorkerCandidate]) -> Optional[WorkerCandidate]:
+        """Select the candidate worker with the lowest composite load score."""
+        if not candidates:
+            return None
+        return min(candidates, key=lambda c: c.score)
+
+
 
 
 
