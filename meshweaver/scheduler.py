@@ -103,5 +103,48 @@ class TaskScheduler:
         self._round_robin_index = 0
         self._active_tasks: Dict[str, int] = {}  # node_id -> active task count
 
+    def get_active_candidates(
+        self,
+        exclude_node_ids: Optional[Set[str]] = None,
+    ) -> List[WorkerCandidate]:
+        """
+        Retrieve alive peer candidates from GossipManager and compute their composite load scores.
+        """
+        if not self.gossip_manager:
+            return []
+
+        excluded = exclude_node_ids or set()
+        candidates: List[WorkerCandidate] = []
+
+        peers = self.gossip_manager.get_all_peers()
+        for node_id, peer in peers.items():
+            if node_id in excluded or node_id == self.local_node_id:
+                continue
+            if not peer.is_alive or peer.tcp_port is None:
+                continue
+
+            pending = self._active_tasks.get(node_id, 0)
+            score = self.load_scorer.calculate_score(
+                cpu_percent=peer.cpu_percent,
+                ram_percent=peer.ram_percent,
+                pending_tasks=pending,
+            )
+
+            candidates.append(
+                WorkerCandidate(
+                    node_id=node_id,
+                    host=peer.host,
+                    tcp_port=peer.tcp_port,
+                    cpu_percent=peer.cpu_percent,
+                    ram_percent=peer.ram_percent,
+                    pending_tasks=pending,
+                    score=score,
+                    is_alive=peer.is_alive,
+                )
+            )
+
+        return candidates
+
+
 
 
