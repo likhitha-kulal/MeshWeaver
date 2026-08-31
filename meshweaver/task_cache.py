@@ -44,3 +44,32 @@ class TaskCache:
         hasher.update(args_bytes)
         digest = hasher.hexdigest()
         return f"{cls.CACHE_KEY_PREFIX}{digest}"
+
+    async def get(self, cache_key: str, timeout: float = 5.0) -> Optional[Any]:
+        """Query DHT storage for a memoized result."""
+        if not self.dht_storage:
+            return None
+
+        try:
+            val = await self.dht_storage.find_value(cache_key, timeout=timeout)
+            if val is not None:
+                logger.info(f"DHT TaskCache HIT for key {cache_key[:24]}...")
+                return val
+        except Exception as e:
+            logger.warning(f"DHT TaskCache read error for {cache_key[:24]}...: {e}")
+        return None
+
+    async def put(self, cache_key: str, value: Any, ttl: Optional[float] = None, timeout: float = 5.0) -> bool:
+        """Store a computed result in the DHT with TTL."""
+        if not self.dht_storage:
+            return False
+
+        effective_ttl = ttl if ttl is not None else self.default_ttl
+        try:
+            stored_nodes = await self.dht_storage.store(cache_key, value, ttl=effective_ttl, timeout=timeout)
+            logger.info(f"DHT TaskCache stored on {stored_nodes} peers for key {cache_key[:24]}... (TTL={effective_ttl}s)")
+            return stored_nodes > 0
+        except Exception as e:
+            logger.warning(f"DHT TaskCache write error for {cache_key[:24]}...: {e}")
+            return False
+
