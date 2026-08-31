@@ -21,6 +21,20 @@ class SchedulingPolicy(str, Enum):
 
 
 @dataclass
+class WorkerCandidate:
+    """Represents a potential remote compute worker and its telemetry."""
+    node_id: str
+    host: str
+    tcp_port: int
+    cpu_percent: float = 0.0
+    ram_percent: float = 0.0
+    pending_tasks: int = 0
+    score: float = 0.0
+    is_alive: bool = True
+
+
+
+@dataclass
 class RetryPolicy:
     """Configuration for handling remote dispatch failures and retries."""
     max_retries: int = 3
