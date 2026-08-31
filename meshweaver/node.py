@@ -217,6 +217,28 @@ class MeshNode:
         task_result = await TCPTaskClient.send_task(target_host, target_tcp_port, payload_bytes)
         return TaskSerializer.unpack_result(task_result)
 
+    async def schedule_task(
+        self,
+        func: Callable,
+        *args: Any,
+        policy: Optional[SchedulingPolicy] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        fallback_local: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Intelligently dispatch task to the optimal mesh worker with automatic failover.
+        """
+        return await self.scheduler.dispatch_task(
+            func,
+            *args,
+            policy=policy,
+            retry_policy=retry_policy,
+            fallback_local=fallback_local,
+            **kwargs,
+        )
+
+
 
 # --- Builtin helper tasks for CLI demonstration ---
 def sample_add(a: int, b: int) -> int:
