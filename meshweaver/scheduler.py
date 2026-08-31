@@ -173,6 +173,33 @@ class TaskScheduler:
         sample = random.sample(candidates, 2)
         return min(sample, key=lambda c: c.score)
 
+    def select_worker(
+        self,
+        policy: Optional[SchedulingPolicy] = None,
+        exclude_node_ids: Optional[Set[str]] = None,
+    ) -> Optional[WorkerCandidate]:
+        """
+        Select an optimal worker node according to the specified policy,
+        excluding any specified node IDs.
+        """
+        chosen_policy = policy or self.default_policy
+        candidates = self.get_active_candidates(exclude_node_ids=exclude_node_ids)
+        if not candidates:
+            return None
+
+        if chosen_policy == SchedulingPolicy.LEAST_LOADED:
+            return self._select_least_loaded(candidates)
+        elif chosen_policy == SchedulingPolicy.ROUND_ROBIN:
+            return self._select_round_robin(candidates)
+        elif chosen_policy == SchedulingPolicy.POWER_OF_TWO_RANDOM:
+            return self._select_power_of_two(candidates)
+        elif chosen_policy == SchedulingPolicy.LOCAL_FIRST:
+            # Check if least loaded remote is significantly better or fallback
+            return self._select_least_loaded(candidates)
+        else:
+            return self._select_least_loaded(candidates)
+
+
 
 
 
