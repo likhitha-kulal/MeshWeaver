@@ -12,12 +12,16 @@ from typing import Any, Callable, List, Optional, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from meshweaver.batch_executor import BatchMetrics, ParallelBatchExecutor
 from meshweaver.gossip import GossipManager
 from meshweaver.dht_storage import DHTStorage
 from meshweaver.models import Message, NodeID, NodeInfo
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.routing_table import RoutingTable
+from meshweaver.scheduler import RetryPolicy, SchedulingPolicy, TaskScheduler
+from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,6 +65,14 @@ class MeshNode:
         self.bound_udp_port: int = 0
         self.bound_tcp_port: int = 0
 
+        self.scheduler = TaskScheduler(
+            local_node_id=self.node_id.hex(),
+            gossip_manager=self.gossip_manager,
+        )
+        self.batch_executor = ParallelBatchExecutor(scheduler=self.scheduler)
+        self.task_cache = TaskCache(dht_storage=None)
+
+
     @property
     def info(self) -> NodeInfo:
         return NodeInfo(
@@ -103,7 +115,9 @@ class MeshNode:
         self.udp_transport = transport  # type: ignore
         self.udp_protocol = protocol  # type: ignore
         self.dht_storage = DHTStorage(self.udp_protocol)
+        self.task_cache.dht_storage = self.dht_storage
         self.bound_udp_port = self.udp_protocol.local_udp_port
+
         self.gossip_manager.bind_network(self.udp_protocol)
         self.gossip_manager.set_send_callback(
             lambda host, port, payload: self.udp_protocol.send_gossip(host, port, payload)
