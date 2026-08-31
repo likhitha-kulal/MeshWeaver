@@ -36,3 +36,18 @@ def chunk_iterable(items: Sequence[Any], chunk_size: int = 1) -> List[List[Any]]
     if chunk_size < 1:
         raise ValueError("chunk_size must be at least 1")
     return [list(items[i : i + chunk_size]) for i in range(0, len(items), chunk_size)]
+
+
+class ParallelBatchExecutor:
+    """
+    Distributes batch task execution across mesh peer workers in parallel.
+    """
+
+    def __init__(
+        self,
+        scheduler: TaskScheduler,
+        default_concurrency: int = 10,
+    ):
+        self.scheduler = scheduler
+        self.default_concurrency = max(1, default_concurrency)
+
