@@ -147,4 +147,39 @@ class ParallelBatchExecutor:
         metrics.duration_seconds = round(time.perf_counter() - start_time, 3)
         return ordered_results, metrics
 
+    async def map_unordered(
+        self,
+        func: Callable[[Any], Any],
+        iterable: Sequence[Any],
+        concurrency: Optional[int] = None,
+        policy: Optional[SchedulingPolicy] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+    ) -> AsyncGenerator[Tuple[int, Any], None]:
+        """
+        Asynchronously stream results as soon as individual subtasks complete on the mesh.
+        Yields (item_index, result) tuples.
+        """
+        items = list(iterable)
+        if not items:
+            return
+
+        limit = concurrency or self.default_concurrency
+        semaphore = asyncio.Semaphore(limit)
+
+        async def _run_item(idx: int, val: Any) -> Tuple[int, Any]:
+            async with semaphore:
+                res = await self.scheduler.dispatch_task(
+                    func,
+                    val,
+                    policy=policy,
+                    retry_policy=retry_policy,
+                )
+                return idx, res
+
+        tasks = [asyncio.create_task(_run_item(i, item)) for i, item in enumerate(items)]
+        for completed_task in asyncio.as_completed(tasks):
+            idx, res = await completed_task
+            yield idx, res
+
+
 
