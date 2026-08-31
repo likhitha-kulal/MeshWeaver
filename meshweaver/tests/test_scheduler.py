@@ -69,6 +69,25 @@ class TestWorkerSelection(unittest.TestCase):
         self.assertIn(selected.node_id, ["node_a", "node_b", "node_c"])
 
 
+class TestRetryPolicyAndFailover(unittest.IsolatedAsyncioTestCase):
+    """Test suite for retry policy, failure recovery, and local fallback."""
+
+    async def test_local_fallback_when_no_workers(self):
+        scheduler = TaskScheduler(local_node_id="local_node")
+        # No gossip manager, no candidates -> should execute locally
+        def sample_multiply(x: int, y: int) -> int:
+            return x * y
+
+        result = await scheduler.dispatch_task(sample_multiply, 6, 7, fallback_local=True)
+        self.assertEqual(result, 42)
+
+    async def test_no_workers_raises_when_fallback_disabled(self):
+        scheduler = TaskScheduler(local_node_id="local_node")
+        with self.assertRaises(RuntimeError):
+            await scheduler.dispatch_task(lambda: 10, fallback_local=False)
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
