@@ -4,11 +4,17 @@ Provides intelligent load-balanced task dispatching, retry policies,
 and failover mechanisms across active mesh peer nodes.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
+import inspect
 import logging
 import random
+import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+from meshweaver.networking import TCPTaskClient
+from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
 
 logger = logging.getLogger("meshweaver.scheduler")
@@ -198,6 +204,98 @@ class TaskScheduler:
             return self._select_least_loaded(candidates)
         else:
             return self._select_least_loaded(candidates)
+
+    async def _execute_local(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
+        """Execute callable locally on this node as fallback."""
+        if inspect.iscoroutinefunction(func):
+            return await func(*args, **kwargs)
+        return func(*args, **kwargs)
+
+    async def dispatch_task(
+        self,
+        func: Callable,
+        *args: Any,
+        policy: Optional[SchedulingPolicy] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        fallback_local: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Dispatch task to an optimal remote worker with automatic failover and retry logic.
+        """
+        retries = retry_policy or self.retry_policy
+        excluded_nodes: Set[str] = set()
+        last_exception: Optional[Exception] = None
+
+        payload_bytes = TaskSerializer.serialize(func, *args, **kwargs)
+
+        for attempt in range(1, retries.max_retries + 1):
+            worker = self.select_worker(policy=policy, exclude_node_ids=excluded_nodes)
+
+            if not worker:
+                logger.warning(
+                    f"No eligible remote workers found for task {func.__name__} (attempt {attempt}/{retries.max_retries})"
+                )
+                if fallback_local:
+                    logger.info(f"Falling back to local execution for task {func.__name__}")
+                    return await self._execute_local(func, *args, **kwargs)
+                raise RuntimeError(f"No available compute workers in mesh network for {func.__name__}")
+
+            logger.info(
+                f"Dispatching task {func.__name__} to worker {worker.node_id[:8]}... "
+                f"({worker.host}:{worker.tcp_port}, score={worker.score}) [attempt {attempt}/{retries.max_retries}]"
+            )
+
+            # Track in-flight task for load scoring
+            self._active_tasks[worker.node_id] = self._active_tasks.get(worker.node_id, 0) + 1
+            start_time = time.perf_counter()
+
+            try:
+                task_result = await TCPTaskClient.send_task(
+                    worker.host,
+                    worker.tcp_port,
+                    payload_bytes,
+                    timeout=retries.timeout_per_attempt,
+                )
+                duration = time.perf_counter() - start_time
+                logger.info(
+                    f"Task {func.__name__} completed on {worker.node_id[:8]}... in {duration:.3f}s"
+                )
+                return TaskSerializer.unpack_result(task_result)
+
+            except RemoteExecutionError:
+                # Execution failed inside worker code (logic error/exception), do not retry across network
+                raise
+
+            except Exception as e:
+                duration = time.perf_counter() - start_time
+                logger.warning(
+                    f"Remote execution failed on worker {worker.node_id[:8]}... after {duration:.3f}s: {e}"
+                )
+                last_exception = e
+                if retries.exclude_failed_nodes:
+                    excluded_nodes.add(worker.node_id)
+
+                if attempt < retries.max_retries:
+                    delay = retries.backoff_factor * (2 ** (attempt - 1))
+                    logger.info(f"Retrying task {func.__name__} in {delay:.2f}s...")
+                    await asyncio.sleep(delay)
+
+            finally:
+                if worker.node_id in self._active_tasks:
+                    self._active_tasks[worker.node_id] = max(0, self._active_tasks[worker.node_id] - 1)
+
+        # All retries exhausted
+        if fallback_local:
+            logger.warning(
+                f"All remote dispatch attempts exhausted for {func.__name__}. Falling back to local execution."
+            )
+            return await self._execute_local(func, *args, **kwargs)
+
+        raise RuntimeError(
+            f"Failed to execute task {func.__name__} after {retries.max_retries} attempts: {last_exception}"
+        )
+
 
 
 
