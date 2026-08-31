@@ -296,6 +296,16 @@ class TaskScheduler:
             f"Failed to execute task {func.__name__} after {retries.max_retries} attempts: {last_exception}"
         )
 
+    def get_stats(self) -> Dict[str, Any]:
+        """Return snapshot of active task distribution across workers."""
+        return {
+            "default_policy": self.default_policy.value,
+            "active_tasks_by_node": dict(self._active_tasks),
+            "total_active_tasks": sum(self._active_tasks.values()),
+            "active_candidates_count": len(self.get_active_candidates()),
+        }
+
+
 
 
 
