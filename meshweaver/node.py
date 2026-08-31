@@ -320,6 +320,15 @@ async def cli_main() -> None:
     parser.add_argument("--find-node", type=str, default=None, help="Target NodeID hex to query")
     parser.add_argument("--task-target-port", type=int, default=None, help="Target TCP port for task submission")
     parser.add_argument("--demo-task", action="store_true", help="Submit demo tasks")
+    parser.add_argument(
+        "--scheduler-policy",
+        type=str,
+        default="least_loaded",
+        choices=["least_loaded", "round_robin", "power_of_two_random", "local_first"],
+        help="Task scheduling policy to use for automated dispatch",
+    )
+    parser.add_argument("--batch-demo", action="store_true", help="Run parallel distributed batch demo")
+    parser.add_argument("--cache-demo", action="store_true", help="Run DHT cached compute demo")
 
     args = parser.parse_args()
 
@@ -353,9 +362,25 @@ async def cli_main() -> None:
             add_res = await node.submit_task(args.host, args.task_target_port, sample_add, 42, 58)
             logger.info(f"Remote Task Result: add(42, 58) = {add_res}")
 
-        if not (args.ping_host or args.bootstrap_host or args.demo_task):
+        if args.batch_demo:
+            policy = SchedulingPolicy(args.scheduler_policy)
+            logger.info(f"Executing batch demo with policy={policy.value}...")
+            batch_inputs = list(range(1, 11))
+            results, metrics = await node.map(sample_fibonacci, batch_inputs, policy=policy)
+            logger.info(f"Batch completed: {metrics.completed_items}/{metrics.total_items} in {metrics.duration_seconds}s (Throughput: {metrics.throughput} items/s)")
+            logger.info(f"Batch results: {results}")
+
+        if args.cache_demo:
+            logger.info("Executing DHT cached compute demo...")
+            res1 = await node.cached_compute(sample_fibonacci, 35, ttl=120)
+            logger.info(f"First compute (computed): fib(35) = {res1}")
+            res2 = await node.cached_compute(sample_fibonacci, 35, ttl=120)
+            logger.info(f"Second compute (cache hit): fib(35) = {res2}")
+
+        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo):
             logger.info("Node running. Press Ctrl+C to shutdown.")
             await asyncio.Event().wait()
+
 
     except KeyboardInterrupt:
         logger.info("Shutdown requested.")
