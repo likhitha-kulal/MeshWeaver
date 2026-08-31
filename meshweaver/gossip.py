@@ -34,9 +34,18 @@ class PeerLoadSnapshot:
     node_id: str
     ip: str
     udp_port: int
+    tcp_port: Optional[int] = None
     cpu_percent: float = 0.0
     ram_percent: float = 0.0
     timestamp: float = field(default_factory=time.time)
+
+    @property
+    def host(self) -> str:
+        return self.ip
+
+    @property
+    def is_alive(self) -> bool:
+        return True
 
 
 class GossipManager:
@@ -61,6 +70,14 @@ class GossipManager:
         self._task: Optional[asyncio.Task[None]] = None
         self._stopped = False
 
+    def get_peer(self, node_id: str) -> Optional[PeerLoadSnapshot]:
+        """Retrieve peer snapshot by node_id if registered."""
+        return self.peer_loads.get(node_id)
+
+    def get_all_peers(self) -> Dict[str, PeerLoadSnapshot]:
+        """Retrieve all active peer load snapshots."""
+        return self.peer_loads
+
     @property
     def peer_table(self) -> Dict[str, PeerLoadSnapshot]:
         return self.peer_loads
@@ -80,13 +97,19 @@ class GossipManager:
 
     def register_neighbor(self, node_id: str, host: str, udp_port: int, tcp_port: Optional[int] = None) -> None:
         self.neighbors[node_id] = (host, udp_port)
-        self.peer_loads.setdefault(node_id, PeerLoadSnapshot(node_id=node_id, ip=host, udp_port=udp_port))
+        effective_tcp = tcp_port if tcp_port is not None else (udp_port + 1)
+        self.peer_loads.setdefault(
+            node_id,
+            PeerLoadSnapshot(node_id=node_id, ip=host, udp_port=udp_port, tcp_port=effective_tcp),
+        )
+
 
     def build_heartbeat(self) -> Dict[str, Any]:
         return {
             "sender_id": self.node_id,
             "ip": self.host,
             "udp_port": self.udp_port,
+            "tcp_port": getattr(self, "tcp_port", self.udp_port + 1),
             "cpu_percent": _read_cpu_percent(),
             "ram_percent": _read_ram_percent(),
             "timestamp": time.time(),
@@ -134,6 +157,7 @@ class GossipManager:
                 return
             ip = str(payload.get("ip", "127.0.0.1"))
             udp_port = int(payload.get("udp_port", 0))
+            tcp_port = int(payload.get("tcp_port", udp_port + 1))
             cpu = float(payload.get("cpu_percent", 0.0))
             ram = float(payload.get("ram_percent", 0.0))
             timestamp = float(payload.get("timestamp", time.time()))
@@ -142,6 +166,7 @@ class GossipManager:
                 node_id=sender_id,
                 ip=ip,
                 udp_port=udp_port,
+                tcp_port=tcp_port,
                 cpu_percent=cpu,
                 ram_percent=ram,
                 timestamp=timestamp,
@@ -149,6 +174,7 @@ class GossipManager:
             self.neighbors.setdefault(sender_id, (ip, udp_port))
         except (TypeError, ValueError):
             logger.warning(f"Ignoring malformed gossip heartbeat: {payload}")
+
 
     def expire_dead_nodes(self, now: Optional[float] = None) -> List[str]:
         if now is None:

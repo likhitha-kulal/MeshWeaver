@@ -12,12 +12,16 @@ from typing import Any, Callable, List, Optional, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from meshweaver.batch_executor import BatchMetrics, ParallelBatchExecutor
 from meshweaver.gossip import GossipManager
 from meshweaver.dht_storage import DHTStorage
 from meshweaver.models import Message, NodeID, NodeInfo
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.routing_table import RoutingTable
+from meshweaver.scheduler import RetryPolicy, SchedulingPolicy, TaskScheduler
+from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,6 +65,14 @@ class MeshNode:
         self.bound_udp_port: int = 0
         self.bound_tcp_port: int = 0
 
+        self.scheduler = TaskScheduler(
+            local_node_id=self.node_id.hex(),
+            gossip_manager=self.gossip_manager,
+        )
+        self.batch_executor = ParallelBatchExecutor(scheduler=self.scheduler)
+        self.task_cache = TaskCache(dht_storage=None)
+
+
     @property
     def info(self) -> NodeInfo:
         return NodeInfo(
@@ -103,7 +115,9 @@ class MeshNode:
         self.udp_transport = transport  # type: ignore
         self.udp_protocol = protocol  # type: ignore
         self.dht_storage = DHTStorage(self.udp_protocol)
+        self.task_cache.dht_storage = self.dht_storage
         self.bound_udp_port = self.udp_protocol.local_udp_port
+
         self.gossip_manager.bind_network(self.udp_protocol)
         self.gossip_manager.set_send_callback(
             lambda host, port, payload: self.udp_protocol.send_gossip(host, port, payload)
@@ -203,6 +217,76 @@ class MeshNode:
         task_result = await TCPTaskClient.send_task(target_host, target_tcp_port, payload_bytes)
         return TaskSerializer.unpack_result(task_result)
 
+    async def schedule_task(
+        self,
+        func: Callable,
+        *args: Any,
+        policy: Optional[SchedulingPolicy] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        fallback_local: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Intelligently dispatch task to the optimal mesh worker with automatic failover.
+        """
+        return await self.scheduler.dispatch_task(
+            func,
+            *args,
+            policy=policy,
+            retry_policy=retry_policy,
+            fallback_local=fallback_local,
+            **kwargs,
+        )
+
+    async def map(
+        self,
+        func: Callable[[Any], Any],
+        iterable: Any,
+        chunk_size: int = 1,
+        concurrency: Optional[int] = None,
+        policy: Optional[SchedulingPolicy] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        return_exceptions: bool = False,
+    ) -> Tuple[List[Any], BatchMetrics]:
+        """
+        Distribute batch workload across the mesh concurrently.
+        """
+        return await self.batch_executor.map(
+            func=func,
+            iterable=iterable,
+            chunk_size=chunk_size,
+            concurrency=concurrency,
+            policy=policy,
+            retry_policy=retry_policy,
+            return_exceptions=return_exceptions,
+        )
+
+    async def cached_compute(
+        self,
+        func: Callable,
+        *args: Any,
+        ttl: Optional[float] = None,
+        force_refresh: bool = False,
+        policy: Optional[SchedulingPolicy] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Execute computation with automatic DHT memoization.
+        """
+        async def _dispatch_wrapper(f: Callable, *a: Any, **kw: Any) -> Any:
+            return await self.schedule_task(f, *a, policy=policy, **kw)
+
+        return await self.task_cache.execute_with_cache(
+            func,
+            *args,
+            executor_func=_dispatch_wrapper,
+            ttl=ttl,
+            force_refresh=force_refresh,
+            **kwargs,
+        )
+
+
+
 
 # --- Builtin helper tasks for CLI demonstration ---
 def sample_add(a: int, b: int) -> int:
@@ -236,6 +320,15 @@ async def cli_main() -> None:
     parser.add_argument("--find-node", type=str, default=None, help="Target NodeID hex to query")
     parser.add_argument("--task-target-port", type=int, default=None, help="Target TCP port for task submission")
     parser.add_argument("--demo-task", action="store_true", help="Submit demo tasks")
+    parser.add_argument(
+        "--scheduler-policy",
+        type=str,
+        default="least_loaded",
+        choices=["least_loaded", "round_robin", "power_of_two_random", "local_first"],
+        help="Task scheduling policy to use for automated dispatch",
+    )
+    parser.add_argument("--batch-demo", action="store_true", help="Run parallel distributed batch demo")
+    parser.add_argument("--cache-demo", action="store_true", help="Run DHT cached compute demo")
 
     args = parser.parse_args()
 
@@ -269,9 +362,25 @@ async def cli_main() -> None:
             add_res = await node.submit_task(args.host, args.task_target_port, sample_add, 42, 58)
             logger.info(f"Remote Task Result: add(42, 58) = {add_res}")
 
-        if not (args.ping_host or args.bootstrap_host or args.demo_task):
+        if args.batch_demo:
+            policy = SchedulingPolicy(args.scheduler_policy)
+            logger.info(f"Executing batch demo with policy={policy.value}...")
+            batch_inputs = list(range(1, 11))
+            results, metrics = await node.map(sample_fibonacci, batch_inputs, policy=policy)
+            logger.info(f"Batch completed: {metrics.completed_items}/{metrics.total_items} in {metrics.duration_seconds}s (Throughput: {metrics.throughput} items/s)")
+            logger.info(f"Batch results: {results}")
+
+        if args.cache_demo:
+            logger.info("Executing DHT cached compute demo...")
+            res1 = await node.cached_compute(sample_fibonacci, 35, ttl=120)
+            logger.info(f"First compute (computed): fib(35) = {res1}")
+            res2 = await node.cached_compute(sample_fibonacci, 35, ttl=120)
+            logger.info(f"Second compute (cache hit): fib(35) = {res2}")
+
+        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo):
             logger.info("Node running. Press Ctrl+C to shutdown.")
             await asyncio.Event().wait()
+
 
     except KeyboardInterrupt:
         logger.info("Shutdown requested.")
