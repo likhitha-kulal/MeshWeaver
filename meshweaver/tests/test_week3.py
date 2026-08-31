@@ -81,6 +81,31 @@ class TestWeek3ClusterIntegration(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(res, 64)
 
+    async def test_multinode_failover_recovery(self):
+        """Verify scheduler catches connection drops and fails over to alive worker."""
+        # Set node2 as preferred candidate
+        p2 = self.node1.gossip_manager.get_peer(self.node2.node_id.hex())
+        p3 = self.node1.gossip_manager.get_peer(self.node3.node_id.hex())
+        if p2:
+            p2.cpu_percent = 5.0
+            p2.ram_percent = 5.0
+        if p3:
+            p3.cpu_percent = 50.0
+            p3.ram_percent = 50.0
+
+        # Simulate sudden crash / stop of node2
+        await self.node2.stop()
+
+        # Node1 schedules task -> node2 will fail with connection refused -> retries on node3
+        res = await self.node1.schedule_task(
+            compute_sum,
+            15,
+            25,
+            policy=SchedulingPolicy.LEAST_LOADED,
+        )
+        self.assertEqual(res, 40)
+
+
 
 if __name__ == "__main__":
     unittest.main()
