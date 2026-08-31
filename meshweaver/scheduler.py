@@ -151,6 +151,15 @@ class TaskScheduler:
             return None
         return min(candidates, key=lambda c: c.score)
 
+    def _select_round_robin(self, candidates: List[WorkerCandidate]) -> Optional[WorkerCandidate]:
+        """Select candidates in circular order across invocations."""
+        if not candidates:
+            return None
+        selected = candidates[self._round_robin_index % len(candidates)]
+        self._round_robin_index = (self._round_robin_index + 1) % len(candidates)
+        return selected
+
+
 
 
 
