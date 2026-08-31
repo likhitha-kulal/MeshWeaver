@@ -86,6 +86,34 @@ class TestRetryPolicyAndFailover(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await scheduler.dispatch_task(lambda: 10, fallback_local=False)
 
+    @patch("meshweaver.networking.TCPTaskClient.send_task", new_callable=AsyncMock)
+    async def test_failover_excludes_failed_worker_and_retries_next_worker(self, mock_send_task):
+        mock_gossip = MagicMock()
+        peer_a = MagicMock(host="127.0.0.1", tcp_port=9001, cpu_percent=10.0, ram_percent=10.0, is_alive=True)
+        peer_b = MagicMock(host="127.0.0.1", tcp_port=9002, cpu_percent=20.0, ram_percent=20.0, is_alive=True)
+        mock_gossip.get_all_peers.return_value = {"node_a": peer_a, "node_b": peer_b}
+
+        scheduler = TaskScheduler(
+            local_node_id="local_node",
+            gossip_manager=mock_gossip,
+            default_retry_policy=RetryPolicy(max_retries=2, backoff_factor=0.01, exclude_failed_nodes=True),
+        )
+
+        from meshweaver.models import TaskResult, TaskStatus
+        # First attempt on node_a fails with ConnectionRefusedError, second on node_b succeeds
+        success_result = TaskResult(
+            task_id="t1",
+            status=TaskStatus.COMPLETED,
+            return_value="recovered_value",
+            execution_time=0.01,
+        )
+        mock_send_task.side_effect = [ConnectionRefusedError("Node down"), success_result]
+
+        res = await scheduler.dispatch_task(lambda: "test", fallback_local=False)
+        self.assertEqual(res, "recovered_value")
+        self.assertEqual(mock_send_task.call_count, 2)
+
+
 
 
 
