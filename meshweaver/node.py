@@ -238,6 +238,54 @@ class MeshNode:
             **kwargs,
         )
 
+    async def map(
+        self,
+        func: Callable[[Any], Any],
+        iterable: Any,
+        chunk_size: int = 1,
+        concurrency: Optional[int] = None,
+        policy: Optional[SchedulingPolicy] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        return_exceptions: bool = False,
+    ) -> Tuple[List[Any], BatchMetrics]:
+        """
+        Distribute batch workload across the mesh concurrently.
+        """
+        return await self.batch_executor.map(
+            func=func,
+            iterable=iterable,
+            chunk_size=chunk_size,
+            concurrency=concurrency,
+            policy=policy,
+            retry_policy=retry_policy,
+            return_exceptions=return_exceptions,
+        )
+
+    async def cached_compute(
+        self,
+        func: Callable,
+        *args: Any,
+        ttl: Optional[float] = None,
+        force_refresh: bool = False,
+        policy: Optional[SchedulingPolicy] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Execute computation with automatic DHT memoization.
+        """
+        async def _dispatch_wrapper(f: Callable, *a: Any, **kw: Any) -> Any:
+            return await self.schedule_task(f, *a, policy=policy, **kw)
+
+        return await self.task_cache.execute_with_cache(
+            func,
+            *args,
+            executor_func=_dispatch_wrapper,
+            ttl=ttl,
+            force_refresh=force_refresh,
+            **kwargs,
+        )
+
+
 
 
 # --- Builtin helper tasks for CLI demonstration ---
