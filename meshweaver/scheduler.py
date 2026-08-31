@@ -81,3 +81,27 @@ class LoadScorer:
         return cpu_percent >= cpu_threshold or ram_percent >= ram_threshold
 
 
+class TaskScheduler:
+    """
+    Coordinates intelligent remote task dispatching, load balancing,
+    and automatic failover across mesh peers.
+    """
+
+    def __init__(
+        self,
+        local_node_id: str,
+        gossip_manager: Optional[Any] = None,
+        load_scorer: Optional[LoadScorer] = None,
+        default_policy: SchedulingPolicy = SchedulingPolicy.LEAST_LOADED,
+        default_retry_policy: Optional[RetryPolicy] = None,
+    ):
+        self.local_node_id = local_node_id
+        self.gossip_manager = gossip_manager
+        self.load_scorer = load_scorer or LoadScorer()
+        self.default_policy = default_policy
+        self.retry_policy = default_retry_policy or RetryPolicy()
+        self._round_robin_index = 0
+        self._active_tasks: Dict[str, int] = {}  # node_id -> active task count
+
+
+
