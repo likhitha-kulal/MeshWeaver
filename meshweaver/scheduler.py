@@ -7,7 +7,9 @@ and failover mechanisms across active mesh peer nodes.
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
+import random
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
 
 logger = logging.getLogger("meshweaver.scheduler")
 
@@ -158,6 +160,19 @@ class TaskScheduler:
         selected = candidates[self._round_robin_index % len(candidates)]
         self._round_robin_index = (self._round_robin_index + 1) % len(candidates)
         return selected
+
+    def _select_power_of_two(self, candidates: List[WorkerCandidate]) -> Optional[WorkerCandidate]:
+        """
+        Sample 2 candidates at random and select the one with the lowest score.
+        Mitigates herd effects in large clusters.
+        """
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        sample = random.sample(candidates, 2)
+        return min(sample, key=lambda c: c.score)
+
 
 
 
