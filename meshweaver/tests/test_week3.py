@@ -120,6 +120,21 @@ class TestWeek3ClusterIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(metrics.completed_items, 12)
         self.assertEqual(metrics.failed_items, 0)
 
+    async def test_multinode_dht_task_memoization(self):
+        """Verify DHT result memoization prevents duplicate remote execution."""
+        # Connect DHT routing table between node1 and node2
+        self.node1.routing_table.add_contact(self.node2.info)
+        self.node2.routing_table.add_contact(self.node1.info)
+
+        # First execution -> computes & caches in DHT
+        val1 = await self.node1.cached_compute(compute_sum, 100, 200, ttl=60)
+        self.assertEqual(val1, 300)
+
+        # Second execution -> cache hit from DHT
+        val2 = await self.node1.cached_compute(compute_sum, 100, 200, ttl=60)
+        self.assertEqual(val2, 300)
+
+
 
 
 
