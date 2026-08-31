@@ -73,3 +73,39 @@ class TaskCache:
             logger.warning(f"DHT TaskCache write error for {cache_key[:24]}...: {e}")
             return False
 
+    async def execute_with_cache(
+        self,
+        func: Callable,
+        *args: Any,
+        executor_func: Optional[Callable] = None,
+        ttl: Optional[float] = None,
+        force_refresh: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Execute computation with transparent DHT caching.
+        Returns cached value if available and not force_refresh,
+        otherwise invokes executor_func (or local func) and stores the output.
+        """
+        cache_key = self.compute_cache_key(func, *args, **kwargs)
+
+        if not force_refresh:
+            cached_val = await self.get(cache_key)
+            if cached_val is not None:
+                return cached_val
+
+        # Execute
+        if executor_func is not None:
+            result = await executor_func(func, *args, **kwargs)
+        else:
+            import inspect
+            if inspect.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                result = func(*args, **kwargs)
+
+        # Store in DHT asynchronously
+        await self.put(cache_key, result, ttl=ttl)
+        return result
+
+
