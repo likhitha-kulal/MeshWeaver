@@ -105,6 +105,22 @@ class TestWeek3ClusterIntegration(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(res, 40)
 
+    async def test_multinode_parallel_distributed_map(self):
+        """Verify parallel batch execution over cluster with order preservation."""
+        inputs = list(range(1, 13))
+        results, metrics = await self.node1.map(
+            compute_cube,
+            inputs,
+            concurrency=4,
+            policy=SchedulingPolicy.ROUND_ROBIN,
+        )
+
+        expected = [x ** 3 for x in inputs]
+        self.assertEqual(results, expected)
+        self.assertEqual(metrics.completed_items, 12)
+        self.assertEqual(metrics.failed_items, 0)
+
+
 
 
 if __name__ == "__main__":
