@@ -1,5 +1,5 @@
 """
-MeshWeaver Week 2 Test Suite (Networking & DHT Routing Track - Person A)
+MeshWeaver DHT Networking & Discovery Integration Test Suite.
 Tests KBucket operations, RoutingTable distance indexing & closest-node queries,
 UDP FIND_NODE RPCs, and Multi-Node Bootstrapping.
 """

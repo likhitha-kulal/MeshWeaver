@@ -1,5 +1,5 @@
 """
-MeshWeaver Week 3 Day 4 Integration Test Suite.
+MeshWeaver MapReduce & Pipeline Cluster Integration Test Suite.
 Tests End-to-End Multi-Node Distributed MapReduce and Multi-Stage Task Pipelines
 over real TCP and UDP socket connections.
 """
@@ -40,8 +40,8 @@ def list_product(items: list) -> int:
     return prod
 
 
-class TestWeek3Day4ClusterIntegration(unittest.IsolatedAsyncioTestCase):
-    """End-to-End cluster integration tests for Day 4 MapReduce and Pipelines."""
+class TestClusterPipelineIntegration(unittest.IsolatedAsyncioTestCase):
+    """End-to-End cluster integration tests for MapReduce and Task Pipelines."""
 
     async def asyncSetUp(self):
         # Create 3-node mesh cluster

@@ -1,5 +1,5 @@
 """
-MeshWeaver Week 3 Integration Test Suite.
+MeshWeaver Cluster Scheduler & Failover Integration Test Suite.
 Tests End-to-End Least-Loaded Scheduling, Multi-Node Automatic Failover,
 Distributed Batch Map, and DHT-Backed Result Memoization.
 """
@@ -24,8 +24,8 @@ def compute_sum(a: int, b: int) -> int:
     return a + b
 
 
-class TestWeek3ClusterIntegration(unittest.IsolatedAsyncioTestCase):
-    """End-to-End multi-node cluster integration tests for Week 3."""
+class TestClusterSchedulerIntegration(unittest.IsolatedAsyncioTestCase):
+    """End-to-End multi-node cluster integration tests for Scheduler & Failover."""
 
     async def asyncSetUp(self):
         # Create 3-node mesh cluster
