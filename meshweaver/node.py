@@ -8,15 +8,17 @@ import asyncio
 import logging
 import os
 import sys
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from meshweaver.batch_executor import BatchMetrics, ParallelBatchExecutor
 from meshweaver.gossip import GossipManager
 from meshweaver.dht_storage import DHTStorage
+from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
 from meshweaver.models import Message, NodeID, NodeInfo
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
+from meshweaver.pipeline import PipelineMetrics, TaskPipeline
 from meshweaver.routing_table import RoutingTable
 from meshweaver.scheduler import RetryPolicy, SchedulingPolicy, TaskScheduler
 from meshweaver.task_cache import TaskCache
@@ -70,8 +72,8 @@ class MeshNode:
             gossip_manager=self.gossip_manager,
         )
         self.batch_executor = ParallelBatchExecutor(scheduler=self.scheduler)
+        self.map_reduce_engine = DistributedMapReduce(scheduler=self.scheduler)
         self.task_cache = TaskCache(dht_storage=None)
-
 
     @property
     def info(self) -> NodeInfo:
@@ -135,12 +137,16 @@ class MeshNode:
         )
 
     async def stop(self) -> None:
-        """Stop node services and release allocated network ports."""
-        await self.gossip_manager.stop()
+        """Gracefully shut down all node networking and background services."""
+        if self.gossip_manager:
+            await self.gossip_manager.stop()
+
         if self.tcp_server:
             await self.tcp_server.stop()
-        if self.udp_transport:
+
+        if self.udp_transport and not self.udp_transport.is_closing():
             self.udp_transport.close()
+
         logger.info("MeshNode stopped.")
 
     def register_neighbor(self, node_id: str, host: str, udp_port: int, tcp_port: Optional[int] = None) -> None:
@@ -211,10 +217,23 @@ class MeshNode:
         final_count = self.routing_table.total_contacts()
         return final_count - initial_count
 
-    async def submit_task(self, target_host: str, target_tcp_port: int, func: Callable, *args: Any, **kwargs: Any) -> Any:
-        """Dispatch a serialized task to a target node's TaskServer."""
+    async def submit_task(
+        self,
+        target_host: str,
+        target_tcp_port: int,
+        func: Callable,
+        *args: Any,
+        timeout: float = 30.0,
+        **kwargs: Any,
+    ) -> Any:
+        """Submit a serialized callable directly to a specific target node over TCP."""
         payload_bytes = TaskSerializer.serialize(func, *args, **kwargs)
-        task_result = await TCPTaskClient.send_task(target_host, target_tcp_port, payload_bytes)
+        task_result = await TCPTaskClient.send_task(
+            target_host,
+            target_tcp_port,
+            payload_bytes,
+            timeout=timeout,
+        )
         return TaskSerializer.unpack_result(task_result)
 
     async def schedule_task(
@@ -226,9 +245,7 @@ class MeshNode:
         fallback_local: bool = True,
         **kwargs: Any,
     ) -> Any:
-        """
-        Intelligently dispatch task to the optimal mesh worker with automatic failover.
-        """
+        """Schedule and dispatch task with intelligent load balancing and failover."""
         return await self.scheduler.dispatch_task(
             func,
             *args,
@@ -248,9 +265,7 @@ class MeshNode:
         retry_policy: Optional[RetryPolicy] = None,
         return_exceptions: bool = False,
     ) -> Tuple[List[Any], BatchMetrics]:
-        """
-        Distribute batch workload across the mesh concurrently.
-        """
+        """Distribute batch workload across the mesh concurrently."""
         return await self.batch_executor.map(
             func=func,
             iterable=iterable,
@@ -261,6 +276,46 @@ class MeshNode:
             return_exceptions=return_exceptions,
         )
 
+    async def map_reduce(
+        self,
+        map_fn: Callable[[Any], List[Tuple[Any, Any]]],
+        reduce_fn: Callable[[Any, List[Any]], Any],
+        data: Iterable[Any],
+        chunk_size: Optional[int] = None,
+        concurrency: Optional[int] = None,
+        policy: SchedulingPolicy = SchedulingPolicy.LEAST_LOADED,
+    ) -> Tuple[Dict[Any, Any], MapReduceMetrics]:
+        """Execute distributed MapReduce across mesh cluster."""
+        return await self.map_reduce_engine.execute_map_reduce(
+            map_fn=map_fn,
+            reduce_fn=reduce_fn,
+            data=data,
+            chunk_size=chunk_size,
+            concurrency=concurrency,
+            policy=policy,
+        )
+
+    async def tree_reduce(
+        self,
+        reduce_fn: Callable[[Any, Any], Any],
+        data: Iterable[Any],
+        initial_value: Optional[Any] = None,
+        branching_factor: int = 2,
+        policy: SchedulingPolicy = SchedulingPolicy.LEAST_LOADED,
+    ) -> Any:
+        """Execute parallel hierarchical tree reduction across mesh workers."""
+        return await self.map_reduce_engine.tree_reduce(
+            reduce_fn=reduce_fn,
+            data=data,
+            initial_value=initial_value,
+            branching_factor=branching_factor,
+            policy=policy,
+        )
+
+    def create_pipeline(self) -> TaskPipeline:
+        """Create a new composable task pipeline tied to this node's scheduler."""
+        return TaskPipeline(scheduler=self.scheduler)
+
     async def cached_compute(
         self,
         func: Callable,
@@ -270,9 +325,7 @@ class MeshNode:
         policy: Optional[SchedulingPolicy] = None,
         **kwargs: Any,
     ) -> Any:
-        """
-        Execute computation with automatic DHT memoization.
-        """
+        """Execute computation with automatic DHT memoization."""
         async def _dispatch_wrapper(f: Callable, *a: Any, **kw: Any) -> Any:
             return await self.schedule_task(f, *a, policy=policy, **kw)
 
@@ -284,8 +337,6 @@ class MeshNode:
             force_refresh=force_refresh,
             **kwargs,
         )
-
-
 
 
 # --- Builtin helper tasks for CLI demonstration ---
@@ -304,8 +355,13 @@ def sample_fibonacci(n: int) -> int:
     return b
 
 
-def sample_failing_task() -> float:
-    return 1 / 0
+def sample_word_mapper(line: str) -> List[Tuple[str, int]]:
+    words = line.lower().split()
+    return [(w.strip(".,!?:;"), 1) for w in words if w.strip(".,!?:;")]
+
+
+def sample_word_reducer(word: str, counts: List[int]) -> int:
+    return sum(counts)
 
 
 async def cli_main() -> None:
@@ -329,6 +385,8 @@ async def cli_main() -> None:
     )
     parser.add_argument("--batch-demo", action="store_true", help="Run parallel distributed batch demo")
     parser.add_argument("--cache-demo", action="store_true", help="Run DHT cached compute demo")
+    parser.add_argument("--mapreduce-demo", action="store_true", help="Run distributed MapReduce word count demo")
+    parser.add_argument("--pipeline-demo", action="store_true", help="Run multi-stage pipeline compute demo")
 
     args = parser.parse_args()
 
@@ -377,10 +435,40 @@ async def cli_main() -> None:
             res2 = await node.cached_compute(sample_fibonacci, 35, ttl=120)
             logger.info(f"Second compute (cache hit): fib(35) = {res2}")
 
-        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo):
+        if args.mapreduce_demo:
+            sample_docs = [
+                "MeshWeaver is a peer to peer distributed compute mesh",
+                "Distributed computing enables scalable parallel batch workflows",
+                "Kademlia DHT provides decentralized routing and peer lookup",
+                "Task scheduler balances CPU and RAM load across worker nodes",
+                "MeshWeaver handles automatic failover and task retry seamlessly",
+            ]
+            logger.info(f"Executing distributed MapReduce demo across {len(sample_docs)} lines...")
+            counts, mr_metrics = await node.map_reduce(
+                sample_word_mapper,
+                sample_word_reducer,
+                sample_docs,
+            )
+            logger.info(
+                f"MapReduce completed in {mr_metrics.total_duration_seconds:.3f}s (Map: {mr_metrics.map_duration_seconds:.3f}s, Shuffle: {mr_metrics.shuffle_duration_seconds:.3f}s, Reduce: {mr_metrics.reduce_duration_seconds:.3f}s)"
+            )
+            top_words = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            logger.info(f"Top 5 words: {top_words}")
+
+        if args.pipeline_demo:
+            logger.info("Executing multi-stage pipeline demo...")
+            pipeline = node.create_pipeline()
+            pipeline.pipe("Stage 1: Square", lambda x: x * x)
+            pipeline.pipe("Stage 2: Add Constant", lambda x: x + 10)
+            pipeline.add_stage("Stage 3: Aggregate Sum", lambda lst: sum(lst), is_parallel=False)
+
+            inputs = [1, 2, 3, 4, 5]
+            out, p_metrics = await pipeline.execute(inputs)
+            logger.info(f"Pipeline executed {len(p_metrics.stages)} stages in {p_metrics.total_duration_seconds:.3f}s. Result = {out}")
+
+        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo):
             logger.info("Node running. Press Ctrl+C to shutdown.")
             await asyncio.Event().wait()
-
 
     except KeyboardInterrupt:
         logger.info("Shutdown requested.")
