@@ -6,10 +6,12 @@ from meshweaver.batch_executor import BatchMetrics, ParallelBatchExecutor, chunk
 from meshweaver.gossip import GossipManager, PeerLoadSnapshot
 from meshweaver.dht_storage import DHTStorage
 from meshweaver.kbucket import KBucket
+from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
 from meshweaver.models import Message, MessageType, NodeID, NodeInfo, TaskEnvelope, TaskResult
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.node import MeshNode
 from meshweaver.node_lookup import NodeLookup
+from meshweaver.pipeline import PipelineMetrics, PipelineStage, StageMetrics, TaskPipeline
 from meshweaver.routing_table import RoutingTable
 from meshweaver.scheduler import (
     LoadScorer,
@@ -21,7 +23,7 @@ from meshweaver.scheduler import (
 from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
-__version__ = "0.3.0"
+__version__ = "0.3.4"
 
 __all__ = [
     "NodeID",
@@ -51,5 +53,10 @@ __all__ = [
     "ParallelBatchExecutor",
     "BatchMetrics",
     "chunk_iterable",
+    "DistributedMapReduce",
+    "MapReduceMetrics",
+    "TaskPipeline",
+    "PipelineStage",
+    "PipelineMetrics",
+    "StageMetrics",
 ]
-
