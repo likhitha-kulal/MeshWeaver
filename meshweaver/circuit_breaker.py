@@ -134,6 +134,29 @@ class CircuitBreaker:
             if self.state == CircuitState.HALF_OPEN and self._active_probes > 0:
                 self._active_probes -= 1
 
+    @contextlib.asynccontextmanager
+    async def async_guard(self) -> AsyncIterator[None]:
+        """
+        Asynchronous context manager that gates execution through the circuit breaker.
+        """
+        if not self.is_available():
+            raise CircuitBreakerOpenError(
+                f"Circuit breaker for node {self.node_id_hex[:8]} is {self.state.value}"
+            )
+
+        if self.state == CircuitState.HALF_OPEN:
+            self._active_probes += 1
+
+        try:
+            yield
+            self.record_success()
+        except Exception as e:
+            self.record_failure(e)
+            raise
+        finally:
+            if self.state == CircuitState.HALF_OPEN and self._active_probes > 0:
+                self._active_probes -= 1
+
 
 class CircuitBreakerRegistry:
     """
