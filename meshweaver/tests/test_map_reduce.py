@@ -112,6 +112,21 @@ class TestMapReduceUnit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(p1, p2)
         self.assertTrue(0 <= p1 < 4)
 
+    async def test_map_reduce_tripped_nodes_telemetry(self):
+        self.scheduler.circuit_breakers.get_or_create("tripped-mr-worker")
+        self.scheduler.circuit_breakers.record_node_failure("tripped-mr-worker")
+        self.scheduler.circuit_breakers.record_node_failure("tripped-mr-worker")
+        self.scheduler.circuit_breakers.record_node_failure("tripped-mr-worker")
+
+        docs = ["hello world", "hello mesh"]
+        results, metrics = await self.mr.execute_map_reduce(
+            map_fn=word_count_mapper,
+            reduce_fn=word_count_reducer,
+            data=docs,
+        )
+        self.assertEqual(results["hello"], 2)
+        self.assertIn("tripped-mr-worker", metrics.tripped_nodes)
+
 
 if __name__ == "__main__":
     unittest.main()
