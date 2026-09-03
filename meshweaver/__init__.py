@@ -4,6 +4,7 @@ MeshWeaver: A zero-dependency, pure Python peer-to-peer async compute mesh.
 
 from meshweaver.batch_executor import BatchMetrics, ParallelBatchExecutor, chunk_iterable
 from meshweaver.circuit_breaker import (
+    BreakerMetrics,
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitBreakerOpenError,
@@ -71,4 +72,5 @@ __all__ = [
     "CircuitBreakerConfig",
     "CircuitBreakerOpenError",
     "CircuitBreakerRegistry",
+    "BreakerMetrics",
 ]

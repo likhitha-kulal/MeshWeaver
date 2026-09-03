@@ -30,6 +30,19 @@ class CircuitBreakerConfig:
     max_recovery_timeout: float = 60.0  # Maximum cap on recovery timeout
 
 
+@dataclass
+class BreakerMetrics:
+    """Snapshot metrics of a node circuit breaker."""
+    node_id: str
+    state: str
+    failure_count: int
+    success_count: int
+    consecutive_trips: int
+    failure_rate: float
+    is_available: bool
+    current_recovery_timeout: float
+
+
 class CircuitBreakerOpenError(Exception):
     """Raised when an operation is attempted on a target whose circuit breaker is OPEN."""
     pass
@@ -138,6 +151,19 @@ class CircuitBreaker:
         elif current_state == CircuitState.CLOSED:
             self._failure_count = max(0, self._failure_count - 1)
 
+    def get_metrics(self) -> BreakerMetrics:
+        """Returns snapshot metrics object."""
+        return BreakerMetrics(
+            node_id=self.node_id_hex,
+            state=self.state.value,
+            failure_count=self._failure_count,
+            success_count=self._success_count,
+            consecutive_trips=self._consecutive_trips,
+            failure_rate=self.failure_rate,
+            is_available=self.is_available(),
+            current_recovery_timeout=self.current_recovery_timeout,
+        )
+
     @contextlib.contextmanager
     def guard(self) -> Iterator[None]:
         """
@@ -231,6 +257,10 @@ class CircuitBreakerRegistry:
     def registered_count(self) -> int:
         """Total number of registered node circuit breakers."""
         return len(self._breakers)
+
+    def get_all_metrics(self) -> Dict[str, BreakerMetrics]:
+        """Returns snapshot metrics for all registered nodes."""
+        return {nid: cb.get_metrics() for nid, cb in self._breakers.items()}
 
     def clear(self) -> None:
         """Clears all registered circuit breakers."""
