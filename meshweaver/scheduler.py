@@ -60,23 +60,28 @@ class LoadScorer:
         cpu_weight: float = 0.6,
         ram_weight: float = 0.4,
         pending_task_weight: float = 5.0,
+        circuit_failure_weight: float = 15.0,
     ):
         self.cpu_weight = cpu_weight
         self.ram_weight = ram_weight
         self.pending_task_weight = pending_task_weight
+        self.circuit_failure_weight = circuit_failure_weight
 
     def calculate_score(
         self,
         cpu_percent: float,
         ram_percent: float,
         pending_tasks: int = 0,
+        recent_failures: int = 0,
     ) -> float:
         """
         Compute weighted composite load index (lower is better/less busy).
-        Formula: (cpu_w * CPU%) + (ram_w * RAM%) + (task_w * pending_tasks)
+        Formula: (cpu_w * CPU%) + (ram_w * RAM%) + (task_w * pending_tasks) + (fail_w * failures)
         """
         base_score = (self.cpu_weight * cpu_percent) + (self.ram_weight * ram_percent)
-        penalty = self.pending_task_weight * max(0, pending_tasks)
+        penalty = (self.pending_task_weight * max(0, pending_tasks)) + (
+            self.circuit_failure_weight * max(0, recent_failures)
+        )
         return round(base_score + penalty, 3)
 
     def is_overloaded(
@@ -138,10 +143,12 @@ class TaskScheduler:
                 continue
 
             pending = self._active_tasks.get(node_id, 0)
+            cb = self.circuit_breakers.get_or_create(node_id)
             score = self.load_scorer.calculate_score(
                 cpu_percent=peer.cpu_percent,
                 ram_percent=peer.ram_percent,
                 pending_tasks=pending,
+                recent_failures=cb.failure_count,
             )
 
             candidates.append(
