@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from meshweaver.batch_executor import BatchMetrics, ParallelBatchExecutor
+from meshweaver.circuit_breaker import CircuitBreakerConfig, CircuitBreakerRegistry, CircuitState
 from meshweaver.gossip import GossipManager
 from meshweaver.dht_storage import DHTStorage
 from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
@@ -45,6 +46,7 @@ class MeshNode:
         tcp_port: Optional[int] = None,
         node_id: Optional[NodeID] = None,
         k: int = 20,
+        circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
     ):
         self.host = host
         self.requested_udp_port = udp_port
@@ -67,9 +69,11 @@ class MeshNode:
         self.bound_udp_port: int = 0
         self.bound_tcp_port: int = 0
 
+        self.circuit_breakers = CircuitBreakerRegistry(default_config=circuit_breaker_config)
         self.scheduler = TaskScheduler(
             local_node_id=self.node_id.hex(),
             gossip_manager=self.gossip_manager,
+            circuit_breakers=self.circuit_breakers,
         )
         self.batch_executor = ParallelBatchExecutor(scheduler=self.scheduler)
         self.map_reduce_engine = DistributedMapReduce(scheduler=self.scheduler)
@@ -338,6 +342,35 @@ class MeshNode:
             **kwargs,
         )
 
+    def get_circuit_status(self, node_id: Optional[str] = None) -> Dict[str, Any]:
+        """Return circuit breaker status for a specific node or all registered nodes."""
+        if node_id:
+            cb = self.circuit_breakers.get_or_create(node_id)
+            return {
+                "node_id": node_id,
+                "state": cb.state.value,
+                "failure_count": cb.failure_count,
+                "success_count": cb.success_count,
+                "is_available": cb.is_available(),
+            }
+        return {
+            nid: {
+                "state": cb.state.value,
+                "failure_count": cb.failure_count,
+                "success_count": cb.success_count,
+                "is_available": cb.is_available(),
+            }
+            for nid, cb in self.circuit_breakers._breakers.items()
+        }
+
+    def get_tripped_nodes(self) -> List[str]:
+        """Return list of node IDs whose circuit breakers are currently OPEN."""
+        return self.circuit_breakers.get_tripped_nodes()
+
+    def reset_circuit_breakers(self) -> None:
+        """Reset all circuit breakers to CLOSED state."""
+        self.circuit_breakers.clear()
+
 
 # --- Builtin helper tasks for CLI demonstration ---
 def sample_add(a: int, b: int) -> int:
@@ -387,6 +420,7 @@ async def cli_main() -> None:
     parser.add_argument("--cache-demo", action="store_true", help="Run DHT cached compute demo")
     parser.add_argument("--mapreduce-demo", action="store_true", help="Run distributed MapReduce word count demo")
     parser.add_argument("--pipeline-demo", action="store_true", help="Run multi-stage pipeline compute demo")
+    parser.add_argument("--circuit-demo", action="store_true", help="Run circuit breaker fault-tolerance demo")
 
     args = parser.parse_args()
 
@@ -466,7 +500,16 @@ async def cli_main() -> None:
             out, p_metrics = await pipeline.execute(inputs)
             logger.info(f"Pipeline executed {len(p_metrics.stages)} stages in {p_metrics.total_duration_seconds:.3f}s. Result = {out}")
 
-        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo):
+        if args.circuit_demo:
+            logger.info("Executing Circuit Breaker resilience status demo...")
+            stats = node.scheduler.get_stats()
+            logger.info(f"Scheduler Load & Circuit Breaker Stats: {stats}")
+            circuits = node.get_circuit_status()
+            logger.info(f"Active Circuit Breakers ({len(circuits)} registered):")
+            for nid, status in circuits.items():
+                logger.info(f"  -> Node {nid[:8]}... State={status['state']}, Failures={status['failure_count']}, Available={status['is_available']}")
+
+        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo or args.circuit_demo):
             logger.info("Node running. Press Ctrl+C to shutdown.")
             await asyncio.Event().wait()
 
