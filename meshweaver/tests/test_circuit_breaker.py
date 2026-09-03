@@ -171,3 +171,38 @@ class TestCircuitBreakerHalfOpenAndRegistry:
         cb._transition_to(CircuitState.CLOSED)
         assert cb.consecutive_trips == 0
         assert cb.current_recovery_timeout == 1.0
+
+    def test_breaker_metrics_generation(self):
+        cb = CircuitBreaker("node-test", CircuitBreakerConfig(failure_threshold=2))
+        cb.record_failure()
+        metrics = cb.get_metrics()
+
+        assert metrics.node_id == "node-test"
+        assert metrics.state == "CLOSED"
+        assert metrics.failure_count == 1
+        assert metrics.success_count == 0
+        assert metrics.is_available is True
+        assert metrics.failure_rate == 100.0
+
+    def test_registry_remove_and_reset_all(self):
+        registry = CircuitBreakerRegistry()
+        registry.get_or_create("node-1")
+        registry.get_or_create("node-2")
+        assert registry.registered_count == 2
+
+        registry.record_node_failure("node-1")
+        registry.record_node_failure("node-1")
+        registry.record_node_failure("node-1")
+
+        all_m = registry.get_all_metrics()
+        assert len(all_m) == 2
+        assert all_m["node-1"].state == "OPEN"
+
+        # Test reset_all
+        registry.reset_all()
+        assert registry.get_or_create("node-1").state == CircuitState.CLOSED
+
+        # Test remove_node
+        assert registry.remove_node("node-1") is True
+        assert registry.registered_count == 1
+        assert registry.remove_node("non-existent") is False
