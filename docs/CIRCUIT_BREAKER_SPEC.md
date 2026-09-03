@@ -47,6 +47,16 @@ stateDiagram-v2
 | `recovery_timeout` | `5.0s` | Cooldown duration in `OPEN` state before permitting `HALF_OPEN` probe tasks |
 | `half_open_success_threshold` | `2` | Successful probe requests required in `HALF_OPEN` state to return to `CLOSED` |
 | `probe_concurrency` | `1` | Maximum concurrent trial requests permitted while in `HALF_OPEN` state |
+| `backoff_multiplier` | `1.5` | Exponential multiplier scaling recovery timeout across repeated trips |
+| `max_recovery_timeout` | `60.0s` | Maximum ceiling on dynamic recovery timeout |
+
+### Dynamic Recovery Backoff Formula:
+$$T_{\text{recovery}} = \min\left(T_{\text{max}}, T_{\text{base}} \times M^{\max(0, K_{\text{trips}} - 1)}\right)$$
+Where $T_{\text{base}} = \text{recovery\_timeout}$, $M = \text{backoff\_multiplier}$, and $K_{\text{trips}}$ is the number of consecutive circuit trips.
+
+### Composite Load Score Penalty Formula:
+$$S = (w_{\text{cpu}} \times \text{CPU}\%) + (w_{\text{ram}} \times \text{RAM}\%) + (w_{\text{task}} \times N_{\text{in\_flight}}) + (w_{\text{fail}} \times N_{\text{failures}})$$
+Where $w_{\text{fail}} = 15.0$ penalizes flaky nodes before a hard circuit trip occurs.
 
 ---
 
