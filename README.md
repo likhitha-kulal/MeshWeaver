@@ -75,7 +75,8 @@ MeshWeaver/
 ├── examples/
 │   ├── distributed_word_count.py # Distributed MapReduce word count benchmark
 │   ├── monte_carlo_pi.py         # Distributed Monte Carlo Pi estimation
-│   └── resilient_cluster_demo.py # Cluster fault tolerance & circuit breaker demo
+│   ├── resilient_cluster_demo.py # Cluster fault tolerance & circuit breaker demo
+│   └── fault_injection_benchmark.py # Fault injection & stress benchmark suite
 ├── meshweaver/
 │   ├── __init__.py             # Public package exports (v0.3.5)
 │   ├── models.py               # NodeID, NodeInfo, Message, TaskEnvelope, TaskResult
@@ -152,6 +153,9 @@ python examples/monte_carlo_pi.py
 
 # Resilient Cluster Circuit Breaker Demo:
 python examples/resilient_cluster_demo.py
+
+# Fault Injection & Stress Benchmark:
+python examples/fault_injection_benchmark.py
 ```
 
 ---
