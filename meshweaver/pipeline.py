@@ -34,6 +34,7 @@ class PipelineMetrics:
     total_duration_seconds: float = 0.0
     stages: List[StageMetrics] = field(default_factory=list)
     is_successful: bool = True
+    tripped_nodes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -150,8 +151,12 @@ class TaskPipeline:
                 metrics.stages.append(stage_metric)
                 metrics.is_successful = False
                 metrics.total_duration_seconds = time.perf_counter() - pipeline_start
+                if hasattr(self.scheduler, "circuit_breakers"):
+                    metrics.tripped_nodes = self.scheduler.circuit_breakers.get_tripped_nodes()
                 logger.error(f"Pipeline stage '{stage.name}' failed: {e}")
                 raise
 
         metrics.total_duration_seconds = time.perf_counter() - pipeline_start
+        if hasattr(self.scheduler, "circuit_breakers"):
+            metrics.tripped_nodes = self.scheduler.circuit_breakers.get_tripped_nodes()
         return current_data, metrics
