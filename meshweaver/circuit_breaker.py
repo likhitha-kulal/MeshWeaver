@@ -218,6 +218,20 @@ class CircuitBreakerRegistry:
         """Returns a list of node IDs whose circuits are currently OPEN."""
         return [nid for nid, cb in self._breakers.items() if cb.state == CircuitState.OPEN]
 
+    def remove_node(self, node_id_hex: str) -> bool:
+        """Removes a circuit breaker entry for a departed node. Returns True if removed."""
+        return self._breakers.pop(node_id_hex, None) is not None
+
+    def reset_all(self) -> None:
+        """Resets all registered circuit breakers to CLOSED state without deleting configurations."""
+        for cb in self._breakers.values():
+            cb._transition_to(CircuitState.CLOSED)
+
+    @property
+    def registered_count(self) -> int:
+        """Total number of registered node circuit breakers."""
+        return len(self._breakers)
+
     def clear(self) -> None:
         """Clears all registered circuit breakers."""
         self._breakers.clear()
