@@ -9,7 +9,7 @@ import contextlib
 from dataclasses import dataclass
 from enum import Enum
 import time
-from typing import AsyncIterator, Dict, Iterator, Optional
+from typing import AsyncIterator, Dict, Iterator, List, Optional
 
 
 class CircuitState(Enum):
@@ -133,3 +133,41 @@ class CircuitBreaker:
         finally:
             if self.state == CircuitState.HALF_OPEN and self._active_probes > 0:
                 self._active_probes -= 1
+
+
+class CircuitBreakerRegistry:
+    """
+    Central registry of CircuitBreakers keyed by node_id_hex.
+    """
+
+    def __init__(self, default_config: Optional[CircuitBreakerConfig] = None):
+        self.default_config = default_config or CircuitBreakerConfig()
+        self._breakers: Dict[str, CircuitBreaker] = {}
+
+    def get_or_create(self, node_id_hex: str) -> CircuitBreaker:
+        """Retrieves or creates a CircuitBreaker instance for the specified node."""
+        if node_id_hex not in self._breakers:
+            self._breakers[node_id_hex] = CircuitBreaker(node_id_hex, self.default_config)
+        return self._breakers[node_id_hex]
+
+    def is_node_available(self, node_id_hex: str) -> bool:
+        """Convenience method checking if a node is currently accepting requests."""
+        if node_id_hex not in self._breakers:
+            return True
+        return self._breakers[node_id_hex].is_available()
+
+    def record_node_failure(self, node_id_hex: str, error: Optional[Exception] = None) -> None:
+        """Records a failure for the specified node."""
+        self.get_or_create(node_id_hex).record_failure(error)
+
+    def record_node_success(self, node_id_hex: str) -> None:
+        """Records a success for the specified node."""
+        self.get_or_create(node_id_hex).record_success()
+
+    def get_tripped_nodes(self) -> List[str]:
+        """Returns a list of node IDs whose circuits are currently OPEN."""
+        return [nid for nid, cb in self._breakers.items() if cb.state == CircuitState.OPEN]
+
+    def clear(self) -> None:
+        """Clears all registered circuit breakers."""
+        self._breakers.clear()
