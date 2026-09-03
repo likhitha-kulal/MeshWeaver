@@ -56,6 +56,14 @@ class CircuitBreaker:
                 self._transition_to(CircuitState.HALF_OPEN)
         return self._state
 
+    @property
+    def failure_count(self) -> int:
+        return self._failure_count
+
+    @property
+    def success_count(self) -> int:
+        return self._success_count
+
     def _transition_to(self, new_state: CircuitState) -> None:
         """Performs internal state transition and resets relevant transient counters."""
         self._state = new_state
@@ -78,3 +86,26 @@ class CircuitBreaker:
         if current_state == CircuitState.HALF_OPEN:
             return self._active_probes < self.config.probe_concurrency
         return False
+
+    def record_failure(self, error: Optional[Exception] = None) -> None:
+        """Records an operational failure. Trips circuit to OPEN if threshold exceeded."""
+        self._last_failure_time = time.time()
+        current_state = self.state
+
+        if current_state == CircuitState.HALF_OPEN:
+            # Any failure during half-open probe immediately trips back to OPEN
+            self._transition_to(CircuitState.OPEN)
+        elif current_state == CircuitState.CLOSED:
+            self._failure_count += 1
+            if self._failure_count >= self.config.failure_threshold:
+                self._transition_to(CircuitState.OPEN)
+
+    def record_success(self) -> None:
+        """Records a successful operation."""
+        current_state = self.state
+        if current_state == CircuitState.HALF_OPEN:
+            self._success_count += 1
+            if self._success_count >= self.config.half_open_success_threshold:
+                self._transition_to(CircuitState.CLOSED)
+        elif current_state == CircuitState.CLOSED:
+            self._failure_count = max(0, self._failure_count - 1)
