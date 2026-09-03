@@ -74,6 +74,22 @@ class CircuitBreaker:
     def success_count(self) -> int:
         return self._success_count
 
+    @property
+    def consecutive_trips(self) -> int:
+        return self._consecutive_trips
+
+    @property
+    def total_requests(self) -> int:
+        return self._failure_count + self._success_count
+
+    @property
+    def failure_rate(self) -> float:
+        """Calculates instantaneous failure percentage."""
+        total = self.total_requests
+        if total == 0:
+            return 0.0
+        return round((self._failure_count / total) * 100.0, 2)
+
     def _transition_to(self, new_state: CircuitState) -> None:
         """Performs internal state transition and resets relevant transient counters."""
         self._state = new_state
