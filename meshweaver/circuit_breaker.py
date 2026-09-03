@@ -26,6 +26,8 @@ class CircuitBreakerConfig:
     recovery_timeout: float = 5.0       # Seconds to wait in OPEN state before testing HALF_OPEN
     half_open_success_threshold: int = 2  # Successful probes required in HALF_OPEN to CLOSE
     probe_concurrency: int = 1          # Max concurrent test requests in HALF_OPEN state
+    backoff_multiplier: float = 1.5     # Exponential multiplier for consecutive trip timeouts
+    max_recovery_timeout: float = 60.0  # Maximum cap on recovery timeout
 
 
 class CircuitBreakerOpenError(Exception):
@@ -44,16 +46,23 @@ class CircuitBreaker:
         self._state: CircuitState = CircuitState.CLOSED
         self._failure_count: int = 0
         self._success_count: int = 0
+        self._consecutive_trips: int = 0
         self._last_state_change: float = time.time()
         self._last_failure_time: Optional[float] = None
         self._active_probes: int = 0
+
+    @property
+    def current_recovery_timeout(self) -> float:
+        """Computes dynamic recovery timeout applying exponential backoff for repeated trips."""
+        multiplier = self.config.backoff_multiplier ** max(0, self._consecutive_trips - 1)
+        return min(self.config.max_recovery_timeout, self.config.recovery_timeout * multiplier)
 
     @property
     def state(self) -> CircuitState:
         """Evaluates current state with automatic transition from OPEN to HALF_OPEN on timeout."""
         if self._state == CircuitState.OPEN:
             elapsed = time.time() - self._last_state_change
-            if elapsed >= self.config.recovery_timeout:
+            if elapsed >= self.current_recovery_timeout:
                 self._transition_to(CircuitState.HALF_OPEN)
         return self._state
 
@@ -75,8 +84,10 @@ class CircuitBreaker:
         elif new_state == CircuitState.CLOSED:
             self._failure_count = 0
             self._success_count = 0
+            self._consecutive_trips = 0
             self._active_probes = 0
         elif new_state == CircuitState.OPEN:
+            self._consecutive_trips += 1
             self._active_probes = 0
 
     def is_available(self) -> bool:
