@@ -65,6 +65,18 @@ class TestBatchExecutor(unittest.IsolatedAsyncioTestCase):
         sorted_res = sorted(streamed, key=lambda x: x[0])
         self.assertEqual([val for _, val in sorted_res], [20, 40, 60])
 
+    async def test_batch_map_tripped_nodes_telemetry(self):
+        scheduler = TaskScheduler(local_node_id="local_node")
+        scheduler.circuit_breakers.get_or_create("isolated-node-1")
+        scheduler.circuit_breakers.record_node_failure("isolated-node-1")
+        scheduler.circuit_breakers.record_node_failure("isolated-node-1")
+        scheduler.circuit_breakers.record_node_failure("isolated-node-1")
+
+        executor = ParallelBatchExecutor(scheduler=scheduler, default_concurrency=2)
+        results, metrics = await executor.map(double_val, [1, 2, 3])
+        self.assertEqual(results, [2, 4, 6])
+        self.assertIn("isolated-node-1", metrics.tripped_nodes)
+
 
 if __name__ == "__main__":
     unittest.main()
