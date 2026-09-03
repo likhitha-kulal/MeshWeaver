@@ -112,10 +112,35 @@ class TestRetryPolicyAndFailover(unittest.IsolatedAsyncioTestCase):
         res = await scheduler.dispatch_task(lambda: "test", fallback_local=False)
         self.assertEqual(res, "recovered_value")
         self.assertEqual(mock_send_task.call_count, 2)
+        # Verify node_a failure was recorded in circuit breaker
+        self.assertEqual(scheduler.circuit_breakers.get_or_create("node_a").failure_count, 1)
+        self.assertTrue(scheduler.circuit_breakers.is_node_available("node_b"))
+        self.assertEqual(scheduler.circuit_breakers.get_or_create("node_b").failure_count, 0)
 
+    @patch("meshweaver.networking.TCPTaskClient.send_task", new_callable=AsyncMock)
+    async def test_circuit_breaker_tripping_excludes_node_from_candidates(self, mock_send_task):
+        mock_gossip = MagicMock()
+        peer_a = MagicMock(host="127.0.0.1", tcp_port=9001, cpu_percent=10.0, ram_percent=10.0, is_alive=True)
+        peer_b = MagicMock(host="127.0.0.1", tcp_port=9002, cpu_percent=20.0, ram_percent=20.0, is_alive=True)
+        mock_gossip.get_all_peers.return_value = {"node_a": peer_a, "node_b": peer_b}
 
+        from meshweaver.circuit_breaker import CircuitBreakerConfig, CircuitBreakerRegistry
+        cb_registry = CircuitBreakerRegistry(CircuitBreakerConfig(failure_threshold=2))
+        scheduler = TaskScheduler(
+            local_node_id="local_node",
+            gossip_manager=mock_gossip,
+            circuit_breakers=cb_registry,
+        )
 
+        # Trip node_a
+        cb_registry.record_node_failure("node_a")
+        cb_registry.record_node_failure("node_a")
 
+        self.assertFalse(cb_registry.is_node_available("node_a"))
+        candidates = scheduler.get_active_candidates()
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].node_id, "node_b")
+        self.assertIn("node_a", scheduler.get_stats()["tripped_circuits"])
 
 
 if __name__ == "__main__":

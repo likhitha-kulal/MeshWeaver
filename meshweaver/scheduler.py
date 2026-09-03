@@ -13,6 +13,7 @@ import random
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from meshweaver.circuit_breaker import CircuitBreakerConfig, CircuitBreakerRegistry, CircuitState
 from meshweaver.networking import TCPTaskClient
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
@@ -102,12 +103,14 @@ class TaskScheduler:
         load_scorer: Optional[LoadScorer] = None,
         default_policy: SchedulingPolicy = SchedulingPolicy.LEAST_LOADED,
         default_retry_policy: Optional[RetryPolicy] = None,
+        circuit_breakers: Optional[CircuitBreakerRegistry] = None,
     ):
         self.local_node_id = local_node_id
         self.gossip_manager = gossip_manager
         self.load_scorer = load_scorer or LoadScorer()
         self.default_policy = default_policy
         self.retry_policy = default_retry_policy or RetryPolicy()
+        self.circuit_breakers = circuit_breakers or CircuitBreakerRegistry()
         self._round_robin_index = 0
         self._active_tasks: Dict[str, int] = {}  # node_id -> active task count
 
@@ -117,6 +120,7 @@ class TaskScheduler:
     ) -> List[WorkerCandidate]:
         """
         Retrieve alive peer candidates from GossipManager and compute their composite load scores.
+        Filters out nodes whose circuit breaker is currently OPEN.
         """
         if not self.gossip_manager:
             return []
@@ -129,6 +133,8 @@ class TaskScheduler:
             if node_id in excluded or node_id == self.local_node_id:
                 continue
             if not peer.is_alive or peer.tcp_port is None:
+                continue
+            if not self.circuit_breakers.is_node_available(node_id):
                 continue
 
             pending = self._active_tasks.get(node_id, 0)
@@ -261,10 +267,12 @@ class TaskScheduler:
                 logger.info(
                     f"Task {func.__name__} completed on {worker.node_id[:8]}... in {duration:.3f}s"
                 )
+                self.circuit_breakers.record_node_success(worker.node_id)
                 return TaskSerializer.unpack_result(task_result)
 
             except RemoteExecutionError:
-                # Execution failed inside worker code (logic error/exception), do not retry across network
+                # Execution failed inside worker user code (logic error/exception), do not trip circuit breaker
+                self.circuit_breakers.record_node_success(worker.node_id)
                 raise
 
             except Exception as e:
@@ -272,6 +280,7 @@ class TaskScheduler:
                 logger.warning(
                     f"Remote execution failed on worker {worker.node_id[:8]}... after {duration:.3f}s: {e}"
                 )
+                self.circuit_breakers.record_node_failure(worker.node_id, e)
                 last_exception = e
                 if retries.exclude_failed_nodes:
                     excluded_nodes.add(worker.node_id)
@@ -297,12 +306,13 @@ class TaskScheduler:
         )
 
     def get_stats(self) -> Dict[str, Any]:
-        """Return snapshot of active task distribution across workers."""
+        """Return snapshot of active task distribution and circuit breaker health across workers."""
         return {
             "default_policy": self.default_policy.value,
             "active_tasks_by_node": dict(self._active_tasks),
             "total_active_tasks": sum(self._active_tasks.values()),
             "active_candidates_count": len(self.get_active_candidates()),
+            "tripped_circuits": self.circuit_breakers.get_tripped_nodes(),
         }
 
 
