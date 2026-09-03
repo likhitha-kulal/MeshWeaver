@@ -21,6 +21,19 @@ def compute_heavy_task(item_id: int) -> str:
     return f"processed_item_{item_id}"
 
 
+def print_cluster_status_table(coordinator: MeshNode, title: str) -> None:
+    """Prints a structured ASCII status table of cluster circuit breakers."""
+    summary = coordinator.get_node_health_summary()
+    print(f"\n--- {title} ---")
+    print(f"{'Node ID':<16} | {'Host:Port':<18} | {'State':<10} | {'Failures':<8} | {'Schedulable':<11}")
+    print("-" * 75)
+    for nid, node_data in summary["nodes"].items():
+        addr = f"{node_data['host']}:{node_data.get('tcp_port', 'N/A')}"
+        sched = "YES [OK]" if node_data["is_schedulable"] else "NO [TRIPPED]"
+        print(f"{nid[:14]:<16} | {addr:<18} | {node_data['circuit_state']:<10} | {node_data['failure_count']:<8} | {sched:<11}")
+    print("-" * 75)
+
+
 async def run_resilience_demo():
     print("=" * 65)
     print("   MeshWeaver Distributed Resilience & Circuit Breaker Demo")
@@ -76,6 +89,7 @@ async def run_resilience_demo():
 
         print(f"\n[5] Current Tripped Nodes: {coordinator.get_tripped_nodes()}")
         print("  -> Worker A circuit is now OPEN. Scheduler automatically excludes Worker A.")
+        print_cluster_status_table(coordinator, "Cluster Status: Worker A Isolated (OPEN)")
 
         print("\n[6] Dispatching batch while Worker A is isolated (fast failover / bypass)...")
         start = time.perf_counter()
@@ -113,6 +127,7 @@ async def run_resilience_demo():
         status_recovered = coordinator.get_circuit_status(worker_a_id)
         print(f"\n[10] Worker A Breaker Final State: {status_recovered['state']} (Healthy)")
         print(f"     Tripped nodes remaining: {coordinator.get_tripped_nodes()}")
+        print_cluster_status_table(coordinator, "Cluster Status: Fully Recovered (CLOSED)")
 
         print("\n" + "=" * 65)
         print("   Circuit Breaker Resilience Demonstration Completed Successfully!")
