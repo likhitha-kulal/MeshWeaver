@@ -371,6 +371,35 @@ class MeshNode:
         """Reset all circuit breakers to CLOSED state."""
         self.circuit_breakers.clear()
 
+    def get_node_health_summary(self) -> Dict[str, Any]:
+        """Returns comprehensive cluster node health and circuit breaker summary."""
+        peers = self.gossip_manager.get_all_peers() if self.gossip_manager else {}
+        breaker_metrics = self.circuit_breakers.get_all_metrics()
+        tripped = self.get_tripped_nodes()
+
+        nodes_summary = {}
+        for nid, peer in peers.items():
+            bm = breaker_metrics.get(nid)
+            nodes_summary[nid] = {
+                "host": peer.host,
+                "udp_port": peer.udp_port,
+                "tcp_port": peer.tcp_port,
+                "cpu_percent": peer.cpu_percent,
+                "ram_percent": peer.ram_percent,
+                "is_alive": peer.is_alive,
+                "circuit_state": bm.state if bm else "CLOSED",
+                "failure_count": bm.failure_count if bm else 0,
+                "is_schedulable": peer.is_alive and (bm.is_available if bm else True),
+            }
+
+        return {
+            "local_node_id": self.node_id.hex(),
+            "total_known_peers": len(peers),
+            "healthy_peers": sum(1 for n in nodes_summary.values() if n["is_schedulable"]),
+            "tripped_nodes": tripped,
+            "nodes": nodes_summary,
+        }
+
 
 # --- Builtin helper tasks for CLI demonstration ---
 def sample_add(a: int, b: int) -> int:
