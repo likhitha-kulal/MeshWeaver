@@ -36,6 +36,12 @@ class TestLoadScorer(unittest.TestCase):
         self.assertTrue(self.scorer.is_overloaded(95.0, 50.0))
         self.assertTrue(self.scorer.is_overloaded(50.0, 96.0))
 
+    def test_circuit_failure_penalty_scoring(self):
+        clean_score = self.scorer.calculate_score(cpu_percent=20.0, ram_percent=20.0, recent_failures=0)
+        faulty_score = self.scorer.calculate_score(cpu_percent=20.0, ram_percent=20.0, recent_failures=2)
+        # Failure penalty = 15.0 * 2 = 30.0
+        self.assertEqual(faulty_score, clean_score + 30.0)
+
 
 class TestWorkerSelection(unittest.TestCase):
     """Test suite for scheduling algorithms."""
