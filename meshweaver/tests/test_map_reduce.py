@@ -120,8 +120,8 @@ class TestMapReduceUnit(unittest.IsolatedAsyncioTestCase):
 
         docs = ["hello world", "hello mesh"]
         results, metrics = await self.mr.execute_map_reduce(
-            map_fn=word_count_mapper,
-            reduce_fn=word_count_reducer,
+            map_fn=word_mapper,
+            reduce_fn=word_reducer,
             data=docs,
         )
         self.assertEqual(results["hello"], 2)

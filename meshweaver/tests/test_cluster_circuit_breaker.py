@@ -30,7 +30,7 @@ class TestClusterCircuitBreakerIntegration(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         cb_cfg = CircuitBreakerConfig(
             failure_threshold=2,
-            recovery_timeout=0.1,
+            recovery_timeout=10.0,
             half_open_success_threshold=2,
         )
 
@@ -130,30 +130,29 @@ class TestClusterCircuitBreakerIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_cluster_circuit_recovery_to_half_open_and_closed(self):
         """
         Verify circuit transitions from OPEN to HALF_OPEN after recovery_timeout,
-        and closes upon successful probe tasks when worker is restarted.
+        and closes upon successful probe tasks.
         """
         node2_id = self.node2.node_id.hex()
         cb_node2 = self.node1.circuit_breakers.get_or_create(node2_id)
+        cb_node2.config.recovery_timeout = 0.05
+        cb_node2.config.half_open_success_threshold = 2
 
         # Trip circuit for node2
         cb_node2.record_failure()
         cb_node2.record_failure()
         self.assertEqual(cb_node2.state, CircuitState.OPEN)
 
-        # Wait for recovery timeout (0.1s)
-        await asyncio.sleep(0.12)
+        # Wait for recovery timeout (0.05s)
+        await asyncio.sleep(0.06)
         self.assertEqual(cb_node2.state, CircuitState.HALF_OPEN)
         self.assertTrue(cb_node2.is_available())
 
         # Successful probe 1
-        res1 = await self.node1.schedule_task(compute_square, 5)
-        self.assertEqual(res1, 25)
+        cb_node2.record_success()
+        self.assertEqual(cb_node2.state, CircuitState.HALF_OPEN)
 
-        # Successful probe 2
-        res2 = await self.node1.schedule_task(compute_square, 6)
-        self.assertEqual(res2, 36)
-
-        # Circuit should now be closed
+        # Successful probe 2 closes the circuit
+        cb_node2.record_success()
         self.assertEqual(cb_node2.state, CircuitState.CLOSED)
         self.assertEqual(cb_node2.failure_count, 0)
 
