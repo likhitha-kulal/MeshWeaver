@@ -5,10 +5,11 @@ Prevents cascading cluster failures by isolating failing, overloaded, or
 unresponsive worker nodes.
 """
 
+import contextlib
 from dataclasses import dataclass
 from enum import Enum
 import time
-from typing import Dict, Optional
+from typing import AsyncIterator, Dict, Iterator, Optional
 
 
 class CircuitState(Enum):
@@ -109,3 +110,26 @@ class CircuitBreaker:
                 self._transition_to(CircuitState.CLOSED)
         elif current_state == CircuitState.CLOSED:
             self._failure_count = max(0, self._failure_count - 1)
+
+    @contextlib.contextmanager
+    def guard(self) -> Iterator[None]:
+        """
+        Synchronous context manager that gates execution through the circuit breaker.
+        """
+        if not self.is_available():
+            raise CircuitBreakerOpenError(
+                f"Circuit breaker for node {self.node_id_hex[:8]} is {self.state.value}"
+            )
+
+        if self.state == CircuitState.HALF_OPEN:
+            self._active_probes += 1
+
+        try:
+            yield
+            self.record_success()
+        except Exception as e:
+            self.record_failure(e)
+            raise
+        finally:
+            if self.state == CircuitState.HALF_OPEN and self._active_probes > 0:
+                self._active_probes -= 1
