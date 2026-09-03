@@ -138,3 +138,36 @@ class TestCircuitBreakerHalfOpenAndRegistry:
 
         registry.clear()
         assert len(registry.get_tripped_nodes()) == 0
+
+    def test_exponential_recovery_backoff_on_repeated_trips(self):
+        cb = CircuitBreaker(
+            "node-1",
+            CircuitBreakerConfig(
+                failure_threshold=1,
+                recovery_timeout=1.0,
+                backoff_multiplier=2.0,
+                max_recovery_timeout=10.0,
+            )
+        )
+        # Trip 1: recovery timeout = 1.0 * (2^0) = 1.0
+        cb.record_failure()
+        assert cb.state == CircuitState.OPEN
+        assert cb.consecutive_trips == 1
+        assert cb.current_recovery_timeout == 1.0
+
+        # Trip 2: recovery timeout = 1.0 * (2^1) = 2.0
+        cb._transition_to(CircuitState.HALF_OPEN)
+        cb.record_failure()
+        assert cb.consecutive_trips == 2
+        assert cb.current_recovery_timeout == 2.0
+
+        # Trip 3: recovery timeout = 1.0 * (2^2) = 4.0
+        cb._transition_to(CircuitState.HALF_OPEN)
+        cb.record_failure()
+        assert cb.consecutive_trips == 3
+        assert cb.current_recovery_timeout == 4.0
+
+        # Reset on close
+        cb._transition_to(CircuitState.CLOSED)
+        assert cb.consecutive_trips == 0
+        assert cb.current_recovery_timeout == 1.0
