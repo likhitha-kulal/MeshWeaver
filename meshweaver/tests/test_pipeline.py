@@ -59,6 +59,17 @@ class TestPipelineUnit(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.pipeline.execute([1, 2, 3])
 
+    async def test_pipeline_tripped_nodes_telemetry(self):
+        self.scheduler.circuit_breakers.get_or_create("failed-worker-node")
+        self.scheduler.circuit_breakers.record_node_failure("failed-worker-node")
+        self.scheduler.circuit_breakers.record_node_failure("failed-worker-node")
+        self.scheduler.circuit_breakers.record_node_failure("failed-worker-node")
+
+        self.pipeline.pipe("Double", double_fn)
+        result, metrics = await self.pipeline.execute([10, 20])
+        self.assertEqual(result, [20, 40])
+        self.assertIn("failed-worker-node", metrics.tripped_nodes)
+
 
 if __name__ == "__main__":
     unittest.main()
