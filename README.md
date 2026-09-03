@@ -53,6 +53,12 @@ MeshWeaver provides peer discovery via Kademlia DHT routing, decentralized gossi
    - `UDPNodeProtocol`: Low-latency, non-blocking UDP datagram messaging for PING/PONG heartbeats, gossip, and DHT lookups.
    - `TCPTaskServer` & `TCPTaskClient`: Length-prefixed framed binary stream transport for task dispatch and result reception.
 
+10. **Circuit Breaker Fault Isolation & Resilience (`meshweaver.circuit_breaker`)**
+    - Three-state resilience engine (`CLOSED`, `OPEN`, `HALF_OPEN`) preventing cascading cluster failures.
+    - Automatic node isolation upon reaching configurable failure thresholds.
+    - Proactive `HALF_OPEN` health probe trials after configurable recovery timeouts.
+    - Fine-grained exception discrimination protecting transport circuits from user-level exceptions.
+
 ---
 
 ## 📦 Project Structure
@@ -64,12 +70,14 @@ MeshWeaver/
 ├── docs/
 │   ├── PROTOCOL_SPEC.md        # Wire protocol and framing spec
 │   ├── SCHEDULER_SPEC.md       # Load balancing & failover spec
-│   └── MAPREDUCE_SPEC.md       # MapReduce & Pipeline DAG architecture
+│   ├── MAPREDUCE_SPEC.md       # MapReduce & Pipeline DAG architecture
+│   └── CIRCUIT_BREAKER_SPEC.md # Circuit Breaker state machine & resilience spec
 ├── examples/
 │   ├── distributed_word_count.py # Distributed MapReduce word count benchmark
-│   └── monte_carlo_pi.py         # Distributed Monte Carlo Pi estimation
+│   ├── monte_carlo_pi.py         # Distributed Monte Carlo Pi estimation
+│   └── resilient_cluster_demo.py # Cluster fault tolerance & circuit breaker demo
 ├── meshweaver/
-│   ├── __init__.py             # Public package exports (v0.3.4)
+│   ├── __init__.py             # Public package exports (v0.3.5)
 │   ├── models.py               # NodeID, NodeInfo, Message, TaskEnvelope, TaskResult
 │   ├── kbucket.py              # K-Bucket contact storage with LRU eviction
 │   ├── routing_table.py        # 160-bit Kademlia routing table
@@ -79,6 +87,7 @@ MeshWeaver/
 │   ├── networking.py           # UDP datagram protocol and TCP framing
 │   ├── task_serializer.py      # Cloudpickle serialization & execution engine
 │   ├── scheduler.py            # Intelligent task scheduler & failover engine
+│   ├── circuit_breaker.py      # Circuit Breaker fault isolation & state machine
 │   ├── task_cache.py           # DHT-backed result memoization & caching
 │   ├── batch_executor.py       # Distributed parallel map & batch runner
 │   ├── map_reduce.py           # Distributed MapReduce & tree_reduce engine
@@ -93,13 +102,15 @@ MeshWeaver/
 │       ├── test_networking.py
 │       ├── test_gossip.py
 │       ├── test_scheduler.py
+│       ├── test_circuit_breaker.py
 │       ├── test_task_cache.py
 │       ├── test_batch_executor.py
 │       ├── test_map_reduce.py
 │       ├── test_pipeline.py
 │       ├── test_dht_network.py
 │       ├── test_cluster_scheduler.py
-│       └── test_cluster_pipeline.py
+│       ├── test_cluster_pipeline.py
+│       └── test_cluster_circuit_breaker.py
 ```
 
 ---
@@ -138,6 +149,9 @@ python examples/distributed_word_count.py
 
 # Distributed Monte Carlo Pi Estimation (1 Million points):
 python examples/monte_carlo_pi.py
+
+# Resilient Cluster Circuit Breaker Demo:
+python examples/resilient_cluster_demo.py
 ```
 
 ---
@@ -147,5 +161,7 @@ python examples/monte_carlo_pi.py
 Run the full unit and integration test suite:
 
 ```bash
+python -m pytest
+# or via unittest:
 python -m unittest discover -s meshweaver/tests
 ```
