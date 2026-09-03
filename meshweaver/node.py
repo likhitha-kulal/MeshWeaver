@@ -400,6 +400,19 @@ class MeshNode:
             "nodes": nodes_summary,
         }
 
+    def cleanup_stale_breakers(self) -> int:
+        """Removes circuit breakers for peers no longer active in gossip. Returns cleaned count."""
+        if not self.gossip_manager:
+            return 0
+        active_peers = set(self.gossip_manager.get_all_peers().keys())
+        registered_breakers = list(self.circuit_breakers._breakers.keys())
+        cleaned = 0
+        for nid in registered_breakers:
+            if nid not in active_peers:
+                if self.circuit_breakers.remove_node(nid):
+                    cleaned += 1
+        return cleaned
+
 
 # --- Builtin helper tasks for CLI demonstration ---
 def sample_add(a: int, b: int) -> int:
