@@ -421,6 +421,7 @@ async def cli_main() -> None:
     parser.add_argument("--mapreduce-demo", action="store_true", help="Run distributed MapReduce word count demo")
     parser.add_argument("--pipeline-demo", action="store_true", help="Run multi-stage pipeline compute demo")
     parser.add_argument("--circuit-demo", action="store_true", help="Run circuit breaker fault-tolerance demo")
+    parser.add_argument("--circuit-reset", action="store_true", help="Reset all circuit breakers to CLOSED")
 
     args = parser.parse_args()
 
@@ -433,6 +434,10 @@ async def cli_main() -> None:
     await node.start()
 
     try:
+        if args.circuit_reset:
+            node.reset_circuit_breakers()
+            logger.info("All node circuit breakers have been reset to CLOSED state.")
+
         if args.ping_host and args.ping_port:
             pong = await node.ping(args.ping_host, args.ping_port)
             logger.info(f"PONG received from {pong.sender_id[:8]}... (status={pong.payload.get('status')})")
@@ -509,7 +514,7 @@ async def cli_main() -> None:
             for nid, status in circuits.items():
                 logger.info(f"  -> Node {nid[:8]}... State={status['state']}, Failures={status['failure_count']}, Available={status['is_available']}")
 
-        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo or args.circuit_demo):
+        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo or args.circuit_demo or args.circuit_reset):
             logger.info("Node running. Press Ctrl+C to shutdown.")
             await asyncio.Event().wait()
 
