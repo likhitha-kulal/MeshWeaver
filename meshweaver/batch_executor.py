@@ -22,6 +22,7 @@ class BatchMetrics:
     completed_items: int = 0
     failed_items: int = 0
     duration_seconds: float = 0.0
+    tripped_nodes: List[str] = field(default_factory=list)
 
     @property
     def throughput(self) -> float:
@@ -131,6 +132,8 @@ class ParallelBatchExecutor:
                     ordered_items.append(item)
 
             metrics.duration_seconds = round(time.perf_counter() - start_time, 3)
+            if hasattr(self.scheduler, "circuit_breakers"):
+                metrics.tripped_nodes = self.scheduler.circuit_breakers.get_tripped_nodes()
             return ordered_items, metrics
 
         tasks = [_worker_invoke(i, item) for i, item in enumerate(items)]
@@ -145,6 +148,8 @@ class ParallelBatchExecutor:
                 ordered_results.append(res)
 
         metrics.duration_seconds = round(time.perf_counter() - start_time, 3)
+        if hasattr(self.scheduler, "circuit_breakers"):
+            metrics.tripped_nodes = self.scheduler.circuit_breakers.get_tripped_nodes()
         return ordered_results, metrics
 
     async def map_unordered(
