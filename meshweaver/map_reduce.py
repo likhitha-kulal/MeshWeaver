@@ -31,6 +31,7 @@ class MapReduceMetrics:
     total_duration_seconds: float = 0.0
     workers_utilized: int = 0
     throughput_items_per_sec: float = 0.0
+    tripped_nodes: List[str] = field(default_factory=list)
 
 
 def default_hash_partitioner(key: Any, num_partitions: int) -> int:
@@ -173,6 +174,8 @@ class DistributedMapReduce:
         metrics.total_duration_seconds = total_elapsed
         if total_elapsed > 0:
             metrics.throughput_items_per_sec = len(items) / total_elapsed
+        if hasattr(self.scheduler, "circuit_breakers"):
+            metrics.tripped_nodes = self.scheduler.circuit_breakers.get_tripped_nodes()
 
         return final_output, metrics
 
