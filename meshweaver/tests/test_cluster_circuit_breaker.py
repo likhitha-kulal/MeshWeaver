@@ -156,3 +156,19 @@ class TestClusterCircuitBreakerIntegration(unittest.IsolatedAsyncioTestCase):
         # Circuit should now be closed
         self.assertEqual(cb_node2.state, CircuitState.CLOSED)
         self.assertEqual(cb_node2.failure_count, 0)
+
+    async def test_node_health_summary_and_stale_breaker_cleanup(self):
+        """Verify health summary generation and stale breaker cleanup."""
+        summary = self.node1.get_node_health_summary()
+        self.assertEqual(summary["total_known_peers"], 2)
+        self.assertEqual(summary["healthy_peers"], 2)
+        self.assertEqual(len(summary["tripped_nodes"]), 0)
+
+        # Register a fake ghost breaker
+        self.node1.circuit_breakers.get_or_create("ghost-node-999")
+        self.assertEqual(self.node1.circuit_breakers.registered_count, 1)
+
+        # Stale cleanup should remove ghost node because it's not in active gossip peers
+        cleaned = self.node1.cleanup_stale_breakers()
+        self.assertEqual(cleaned, 1)
+        self.assertEqual(self.node1.circuit_breakers.registered_count, 0)
