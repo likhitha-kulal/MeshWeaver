@@ -50,6 +50,8 @@ class RetryPolicy:
     backoff_factor: float = 0.5
     timeout_per_attempt: float = 5.0
     exclude_failed_nodes: bool = True
+    trip_circuit_on_transport_failure: bool = True
+    jitter: bool = False
 
 
 class LoadScorer:
@@ -287,13 +289,16 @@ class TaskScheduler:
                 logger.warning(
                     f"Remote execution failed on worker {worker.node_id[:8]}... after {duration:.3f}s: {e}"
                 )
-                self.circuit_breakers.record_node_failure(worker.node_id, e)
+                if retries.trip_circuit_on_transport_failure:
+                    self.circuit_breakers.record_node_failure(worker.node_id, e)
                 last_exception = e
                 if retries.exclude_failed_nodes:
                     excluded_nodes.add(worker.node_id)
 
                 if attempt < retries.max_retries:
                     delay = retries.backoff_factor * (2 ** (attempt - 1))
+                    if retries.jitter:
+                        delay += random.uniform(0, 0.1 * delay)
                     logger.info(f"Retrying task {func.__name__} in {delay:.2f}s...")
                     await asyncio.sleep(delay)
 
