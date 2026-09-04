@@ -120,6 +120,8 @@ class TaskScheduler:
         self.circuit_breakers = circuit_breakers or CircuitBreakerRegistry()
         self._round_robin_index = 0
         self._active_tasks: Dict[str, int] = {}  # node_id -> active task count
+        self.priority_dispatcher: Optional[Any] = None
+
 
     def get_active_candidates(
         self,
@@ -317,15 +319,71 @@ class TaskScheduler:
             f"Failed to execute task {func.__name__} after {retries.max_retries} attempts: {last_exception}"
         )
 
+    def enable_priority_queue(
+        self,
+        concurrency: int = 5,
+        aging_interval_seconds: float = 2.0,
+        deadline_boost_weight: float = 2.0,
+    ) -> Any:
+        """
+        Enable and instantiate QoS PriorityDispatcher for prioritized task routing.
+        """
+        from meshweaver.priority_queue import PriorityDispatcher, PriorityTaskQueue
+        queue = PriorityTaskQueue(
+            aging_interval_seconds=aging_interval_seconds,
+            deadline_boost_weight=deadline_boost_weight,
+        )
+        self.priority_dispatcher = PriorityDispatcher(
+            scheduler=self,
+            concurrency=concurrency,
+            queue=queue,
+        )
+        return self.priority_dispatcher
+
+    async def submit_prioritized(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        priority: Any = None,
+        deadline: Optional[float] = None,
+        timeout: Optional[float] = None,
+        task_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> asyncio.Future:
+        """
+        Submit a task to the QoS Priority Dispatcher.
+        Automatically starts the priority dispatcher if not already running.
+        """
+        if self.priority_dispatcher is None:
+            self.enable_priority_queue()
+        if not self.priority_dispatcher._running:
+            await self.priority_dispatcher.start()
+
+        from meshweaver.priority_queue import TaskPriority
+        task_p = priority if priority is not None else TaskPriority.NORMAL
+        return await self.priority_dispatcher.submit(
+            func,
+            *args,
+            priority=task_p,
+            deadline=deadline,
+            timeout=timeout,
+            task_id=task_id,
+            **kwargs,
+        )
+
     def get_stats(self) -> Dict[str, Any]:
-        """Return snapshot of active task distribution and circuit breaker health across workers."""
-        return {
+        """Return snapshot of active task distribution, circuit breaker health, and priority metrics."""
+        stats = {
             "default_policy": self.default_policy.value,
             "active_tasks_by_node": dict(self._active_tasks),
             "total_active_tasks": sum(self._active_tasks.values()),
             "active_candidates_count": len(self.get_active_candidates()),
             "tripped_circuits": self.circuit_breakers.get_tripped_nodes(),
         }
+        if self.priority_dispatcher:
+            stats["priority_queue"] = self.priority_dispatcher.get_stats()
+        return stats
+
 
 
 
