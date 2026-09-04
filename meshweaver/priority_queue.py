@@ -167,6 +167,14 @@ class PriorityTaskQueue:
 
     def _reheapify(self) -> None:
         """Re-orders the underlying heap based on current effective priority."""
+        for t in self._heap:
+            old_p = t.base_priority.value
+            new_p = t.calculate_effective_priority(
+                aging_interval_seconds=self.aging_interval_seconds,
+                deadline_boost_weight=self.deadline_boost_weight,
+            )
+            if new_p < old_p:
+                self.metrics.total_aged_promotions += 1
         heapq.heapify(self._heap)
 
     def peek(self) -> Optional[PrioritizedTask]:
@@ -175,4 +183,18 @@ class PriorityTaskQueue:
             return None
         self._reheapify()
         return self._heap[0]
+
+    def get_effective_queue_snapshot(self) -> List[Dict[str, Any]]:
+        """Return a sorted list of all waiting tasks with their effective priorities and wait durations."""
+        self._reheapify()
+        snapshot = []
+        for t in sorted(self._heap):
+            snapshot.append({
+                "task_id": t.task_id,
+                "base_priority": t.base_priority.name,
+                "effective_priority": round(t.calculate_effective_priority(self.aging_interval_seconds, self.deadline_boost_weight), 2),
+                "wait_time_seconds": round(t.age_seconds, 2),
+                "deadline": t.deadline,
+            })
+        return snapshot
 
