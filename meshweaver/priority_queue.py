@@ -220,6 +220,31 @@ class PriorityTaskQueue:
         self._reheapify()
         return self._heap[0]
 
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel a pending task in the queue by task ID."""
+        task = self._tasks_by_id.get(task_id)
+        if task and not task.cancelled:
+            task.cancelled = True
+            if task.future and not task.future.done():
+                task.future.cancel()
+            self.metrics.total_cancelled += 1
+            return True
+        return False
+
+    def flush_queue(self) -> int:
+        """Remove and cancel all pending tasks in the queue. Returns count of flushed tasks."""
+        flushed_count = 0
+        for task in list(self._heap):
+            if not task.cancelled:
+                task.cancelled = True
+                if task.future and not task.future.done():
+                    task.future.cancel()
+                self.metrics.total_cancelled += 1
+                flushed_count += 1
+        self._heap.clear()
+        self._tasks_by_id.clear()
+        return flushed_count
+
     def get_effective_queue_snapshot(self) -> List[Dict[str, Any]]:
         """Return a sorted list of all waiting tasks with their effective priorities and wait durations."""
         self._reheapify()
@@ -231,8 +256,10 @@ class PriorityTaskQueue:
                 "effective_priority": round(t.calculate_effective_priority(self.aging_interval_seconds, self.deadline_boost_weight), 2),
                 "wait_time_seconds": round(t.age_seconds, 2),
                 "deadline": t.deadline,
+                "cancelled": t.cancelled,
             })
         return snapshot
+
 
 
 class PriorityDispatcher:
@@ -255,10 +282,58 @@ class PriorityDispatcher:
         self._total_wait_time_ms = 0.0
         self._processed_tasks_count = 0
 
+        self._paused = False
+        self._pause_event = asyncio.Event()
+        self._pause_event.set()
+
     @property
     def metrics(self) -> PriorityMetrics:
         """Access QoS metrics."""
         return self.queue.metrics
+
+    def is_paused(self) -> bool:
+        """Return True if dispatcher is currently paused."""
+        return self._paused
+
+    def pause(self) -> None:
+        """Pause dispatching of new tasks without stopping running tasks."""
+        self._paused = True
+        self._pause_event.clear()
+        logger.debug("PriorityDispatcher paused.")
+
+    def resume(self) -> None:
+        """Resume dispatching queued tasks."""
+        self._paused = False
+        self._pause_event.set()
+        logger.debug("PriorityDispatcher resumed.")
+
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel a pending task before it is executed."""
+        return self.queue.cancel_task(task_id)
+
+    def flush(self) -> int:
+        """Purge and cancel all non-executing tasks from the queue."""
+        return self.queue.flush_queue()
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return telemetry dictionary for reporting and dashboards."""
+        return {
+            "queue_size": self.queue.qsize(),
+            "is_running": self._running,
+            "is_paused": self._paused,
+            "concurrency": self.concurrency,
+            "total_enqueued": self.metrics.total_enqueued,
+            "total_completed": self.metrics.total_completed,
+            "total_failed": self.metrics.total_failed,
+            "total_cancelled": self.metrics.total_cancelled,
+            "total_aged_promotions": self.metrics.total_aged_promotions,
+            "avg_wait_time_ms": self.metrics.avg_wait_time_ms,
+            "tasks_by_priority": {
+                TaskPriority(p).name: count
+                for p, count in self.metrics.tasks_by_priority.items()
+            },
+        }
+
 
     async def start(self) -> None:
         """Start background worker pool."""
@@ -317,7 +392,9 @@ class PriorityDispatcher:
         """Background coroutine consuming prioritized tasks from the queue."""
         while self._running:
             try:
+                await self._pause_event.wait()
                 task = await self.queue.pop()
+
                 if task.cancelled:
                     self.queue.metrics.total_cancelled += 1
                     if task.future and not task.future.done():
