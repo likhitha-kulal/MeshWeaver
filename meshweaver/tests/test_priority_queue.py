@@ -11,11 +11,13 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from meshweaver.priority_queue import (
+    PriorityDispatcher,
     PriorityTaskQueue,
     PrioritizedTask,
     TaskPriority,
     calculate_deadline_urgency,
 )
+
 
 
 class TestPriorityQueue(unittest.IsolatedAsyncioTestCase):
@@ -134,6 +136,76 @@ class TestPriorityQueue(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pq.metrics.tasks_by_priority[TaskPriority.HIGH.value], 1)
         self.assertEqual(pq.metrics.tasks_by_priority[TaskPriority.LOW.value], 1)
 
+    async def test_priority_dispatcher_execution_and_preemption(self):
+        """Verify PriorityDispatcher executes CRITICAL task ahead of pending LOW tasks."""
+        class MockScheduler:
+            def __init__(self):
+                self.execution_order = []
+
+            async def dispatch_task(self, func, *args, **kwargs):
+                val = func(*args, **kwargs)
+                self.execution_order.append(val)
+                await asyncio.sleep(0.02)
+                return val
+
+        mock_sched = MockScheduler()
+        dispatcher = PriorityDispatcher(scheduler=mock_sched, concurrency=1)
+        # Disable fast aging during preemption test
+        dispatcher.queue.aging_interval_seconds = 100.0
+
+        await dispatcher.start()
+
+        # Submit 3 LOW tasks and then 1 CRITICAL task
+        f_low1 = await dispatcher.submit(lambda: "low_1", priority=TaskPriority.LOW)
+        f_low2 = await dispatcher.submit(lambda: "low_2", priority=TaskPriority.LOW)
+        f_low3 = await dispatcher.submit(lambda: "low_3", priority=TaskPriority.LOW)
+        f_crit = await dispatcher.submit(lambda: "critical_urgent", priority=TaskPriority.CRITICAL)
+
+        res_crit = await f_crit
+        res_low1 = await f_low1
+        res_low2 = await f_low2
+        res_low3 = await f_low3
+
+        self.assertEqual(res_crit, "critical_urgent")
+        self.assertEqual(res_low1, "low_1")
+
+        # Critical task jumped ahead of all low tasks
+        self.assertEqual(mock_sched.execution_order[0], "critical_urgent")
+        self.assertIn("low_1", mock_sched.execution_order[1:])
+        self.assertIn("low_2", mock_sched.execution_order[1:])
+        self.assertIn("low_3", mock_sched.execution_order[1:])
+
+
+        # Check stats
+        stats = dispatcher.get_stats()
+        self.assertEqual(stats["total_enqueued"], 4)
+        self.assertEqual(stats["total_completed"], 4)
+
+        await dispatcher.stop()
+
+    async def test_priority_dispatcher_cancellation_and_flush(self):
+        """Test task cancellation and queue flushing in PriorityDispatcher."""
+        dispatcher = PriorityDispatcher(scheduler=None, concurrency=1)
+        dispatcher.pause()  # prevent workers from popping
+        await dispatcher.start()
+
+        fut1 = await dispatcher.submit(lambda: 10, priority=TaskPriority.NORMAL, task_id="to_cancel")
+        fut2 = await dispatcher.submit(lambda: 20, priority=TaskPriority.LOW, task_id="to_flush")
+
+        # Cancel specific task
+        cancelled = dispatcher.cancel_task("to_cancel")
+        self.assertTrue(cancelled)
+        self.assertTrue(fut1.cancelled())
+
+        # Flush remainder
+        flushed = dispatcher.flush()
+        self.assertEqual(flushed, 1)
+        self.assertTrue(fut2.cancelled())
+        self.assertEqual(dispatcher.queue.qsize(), 0)
+
+        await dispatcher.stop()
+
 
 if __name__ == "__main__":
     unittest.main()
+
