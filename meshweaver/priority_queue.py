@@ -81,6 +81,8 @@ class PrioritizedTask:
     sequence: int = 0
     assigned_worker: Optional[str] = None
     cancelled: bool = False
+    aging_interval_seconds: float = 2.0
+    deadline_boost_weight: float = 2.0
 
     @property
     def age_seconds(self) -> float:
@@ -89,8 +91,8 @@ class PrioritizedTask:
 
     def calculate_effective_priority(
         self,
-        aging_interval_seconds: float = 2.0,
-        deadline_boost_weight: float = 2.0,
+        aging_interval_seconds: Optional[float] = None,
+        deadline_boost_weight: Optional[float] = None,
         current_time: Optional[float] = None,
     ) -> float:
         """
@@ -100,11 +102,13 @@ class PrioritizedTask:
         """
         score = float(self.base_priority.value)
         now = current_time if current_time is not None else time.time()
+        aging_int = self.aging_interval_seconds if aging_interval_seconds is None else aging_interval_seconds
+        dl_weight = self.deadline_boost_weight if deadline_boost_weight is None else deadline_boost_weight
 
         # 1. Starvation prevention: promote priority based on waiting duration
-        if aging_interval_seconds > 0:
+        if aging_int > 0:
             age = max(0.0, now - self.created_at)
-            promotions = age / aging_interval_seconds
+            promotions = age / aging_int
             score -= promotions
 
         # 2. Deadline awareness: increase priority as deadline approaches
@@ -112,7 +116,7 @@ class PrioritizedTask:
             boost = calculate_deadline_urgency(
                 deadline=self.deadline,
                 current_time=now,
-                deadline_boost_weight=deadline_boost_weight,
+                deadline_boost_weight=dl_weight,
             )
             score -= boost
 
@@ -123,11 +127,13 @@ class PrioritizedTask:
         """Compare two tasks by effective priority, breaking ties using sequence (FIFO)."""
         if not isinstance(other, PrioritizedTask):
             return NotImplemented
-        self_p = self.calculate_effective_priority()
-        other_p = other.calculate_effective_priority()
-        if abs(self_p - other_p) > 1e-6:
+        now = time.time()
+        self_p = self.calculate_effective_priority(current_time=now)
+        other_p = other.calculate_effective_priority(current_time=now)
+        if abs(self_p - other_p) > 1e-4:
             return self_p < other_p
         return self.sequence < other.sequence
+
 
 
 class PriorityTaskQueue:
@@ -167,6 +173,8 @@ class PriorityTaskQueue:
         async with self._not_empty:
             self._sequence_counter += 1
             task.sequence = self._sequence_counter
+            task.aging_interval_seconds = self.aging_interval_seconds
+            task.deadline_boost_weight = self.deadline_boost_weight
             heapq.heappush(self._heap, task)
             self._tasks_by_id[task.task_id] = task
 
@@ -176,6 +184,7 @@ class PriorityTaskQueue:
             self.metrics.tasks_by_priority[p_val] = self.metrics.tasks_by_priority.get(p_val, 0) + 1
 
             self._not_empty.notify()
+
 
     async def pop(self) -> PrioritizedTask:
         """
