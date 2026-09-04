@@ -148,10 +148,14 @@ class MeshNode:
         if self.tcp_server:
             await self.tcp_server.stop()
 
+        if self.scheduler and self.scheduler.priority_dispatcher and self.scheduler.priority_dispatcher._running:
+            await self.scheduler.priority_dispatcher.stop()
+
         if self.udp_transport and not self.udp_transport.is_closing():
             self.udp_transport.close()
 
         logger.info("MeshNode stopped.")
+
 
     def register_neighbor(self, node_id: str, host: str, udp_port: int, tcp_port: Optional[int] = None) -> None:
         """Register a known neighbor for gossip heartbeat exchange."""
@@ -258,6 +262,43 @@ class MeshNode:
             fallback_local=fallback_local,
             **kwargs,
         )
+
+    async def submit_prioritized(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        priority: Any = None,
+        deadline: Optional[float] = None,
+        timeout: Optional[float] = None,
+        task_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> asyncio.Future:
+        """
+        Submit a prioritized task to the QoS Priority Queue.
+        Returns a Future that resolves when execution completes across the mesh.
+        """
+        return await self.scheduler.submit_prioritized(
+            func,
+            *args,
+            priority=priority,
+            deadline=deadline,
+            timeout=timeout,
+            task_id=task_id,
+            **kwargs,
+        )
+
+    def get_queue_metrics(self) -> Dict[str, Any]:
+        """Retrieve telemetry snapshot from the priority dispatcher queue."""
+        if self.scheduler.priority_dispatcher:
+            return self.scheduler.priority_dispatcher.get_stats()
+        return {"queue_size": 0, "is_running": False, "total_enqueued": 0}
+
+    def cancel_prioritized_task(self, task_id: str) -> bool:
+        """Cancel a pending prioritized task by ID."""
+        if self.scheduler.priority_dispatcher:
+            return self.scheduler.priority_dispatcher.cancel_task(task_id)
+        return False
+
 
     async def map(
         self,
