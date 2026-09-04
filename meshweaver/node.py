@@ -505,6 +505,8 @@ async def cli_main() -> None:
     parser.add_argument("--pipeline-demo", action="store_true", help="Run multi-stage pipeline compute demo")
     parser.add_argument("--circuit-demo", action="store_true", help="Run circuit breaker fault-tolerance demo")
     parser.add_argument("--circuit-reset", action="store_true", help="Reset all circuit breakers to CLOSED")
+    parser.add_argument("--priority-demo", action="store_true", help="Run multi-tier Priority QoS compute demo")
+    parser.add_argument("--priority-workers", type=int, default=5, help="Worker concurrency limit for priority queue")
 
     args = parser.parse_args()
 
@@ -520,6 +522,21 @@ async def cli_main() -> None:
         if args.circuit_reset:
             node.reset_circuit_breakers()
             logger.info("All node circuit breakers have been reset to CLOSED state.")
+
+        if args.priority_demo:
+            from meshweaver.priority_queue import TaskPriority
+            logger.info(f"Executing Priority QoS demo with {args.priority_workers} priority workers...")
+            node.scheduler.enable_priority_queue(concurrency=args.priority_workers)
+            
+            f_bg = await node.submit_prioritized(sample_fibonacci, 25, priority=TaskPriority.BACKGROUND, task_id="cli_bg")
+            f_norm = await node.submit_prioritized(sample_add, 100, 250, priority=TaskPriority.NORMAL, task_id="cli_norm")
+            f_crit = await node.submit_prioritized(sample_add, 999, 1, priority=TaskPriority.CRITICAL, task_id="cli_crit")
+
+            r_crit = await f_crit
+            r_norm = await f_norm
+            r_bg = await f_bg
+            logger.info(f"Priority execution results: Critical={r_crit}, Normal={r_norm}, Background={r_bg}")
+            logger.info(f"Priority QoS Stats: {node.get_queue_metrics()}")
 
         if args.ping_host and args.ping_port:
             pong = await node.ping(args.ping_host, args.ping_port)
@@ -597,9 +614,10 @@ async def cli_main() -> None:
             for nid, status in circuits.items():
                 logger.info(f"  -> Node {nid[:8]}... State={status['state']}, Failures={status['failure_count']}, Available={status['is_available']}")
 
-        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo or args.circuit_demo or args.circuit_reset):
+        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo or args.circuit_demo or args.circuit_reset or args.priority_demo):
             logger.info("Node running. Press Ctrl+C to shutdown.")
             await asyncio.Event().wait()
+
 
     except KeyboardInterrupt:
         logger.info("Shutdown requested.")
