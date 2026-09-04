@@ -4,10 +4,15 @@ Provides multi-tier prioritized task scheduling, starvation-free dynamic aging,
 deadline-aware priority promotion, and QoS telemetry across the mesh compute cluster.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from enum import IntEnum
+import heapq
+import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+logger = logging.getLogger("meshweaver.priority_queue")
 
 
 class TaskPriority(IntEnum):
@@ -96,3 +101,78 @@ class PrioritizedTask:
         if abs(self_p - other_p) > 1e-6:
             return self_p < other_p
         return self.sequence < other.sequence
+
+
+class PriorityTaskQueue:
+    """
+    Thread-safe & async-compatible priority queue for compute tasks.
+    Maintains a min-heap structure ordered by dynamic effective priority.
+    """
+
+    def __init__(
+        self,
+        aging_interval_seconds: float = 2.0,
+        deadline_boost_weight: float = 2.0,
+        maxsize: int = 0,
+    ):
+        self.aging_interval_seconds = aging_interval_seconds
+        self.deadline_boost_weight = deadline_boost_weight
+        self.maxsize = maxsize
+        self._heap: List[PrioritizedTask] = []
+        self._lock = asyncio.Lock()
+        self._not_empty = asyncio.Condition(self._lock)
+        self._sequence_counter = 0
+        self._tasks_by_id: Dict[str, PrioritizedTask] = {}
+        self.metrics = PriorityMetrics()
+
+    def qsize(self) -> int:
+        """Return the current number of tasks in the queue."""
+        return len(self._heap)
+
+    def is_empty(self) -> bool:
+        """Check if queue is empty."""
+        return len(self._heap) == 0
+
+    async def push(self, task: PrioritizedTask) -> None:
+        """
+        Enqueue a new prioritized task and notify waiting workers.
+        """
+        async with self._not_empty:
+            self._sequence_counter += 1
+            task.sequence = self._sequence_counter
+            heapq.heappush(self._heap, task)
+            self._tasks_by_id[task.task_id] = task
+
+            # Update metrics
+            self.metrics.total_enqueued += 1
+            p_val = task.base_priority.value
+            self.metrics.tasks_by_priority[p_val] = self.metrics.tasks_by_priority.get(p_val, 0) + 1
+
+            self._not_empty.notify()
+
+    async def pop(self) -> PrioritizedTask:
+        """
+        Retrieve and remove the highest priority task, waiting if empty.
+        Re-heapifies to ensure aging calculations reflect current timestamp.
+        """
+        async with self._not_empty:
+            while self.is_empty():
+                await self._not_empty.wait()
+
+            # Refresh heap ordering with dynamic aging
+            self._reheapify()
+            task = heapq.heappop(self._heap)
+            self._tasks_by_id.pop(task.task_id, None)
+            return task
+
+    def _reheapify(self) -> None:
+        """Re-orders the underlying heap based on current effective priority."""
+        heapq.heapify(self._heap)
+
+    def peek(self) -> Optional[PrioritizedTask]:
+        """Inspect the highest priority task without removing it."""
+        if not self._heap:
+            return None
+        self._reheapify()
+        return self._heap[0]
+
