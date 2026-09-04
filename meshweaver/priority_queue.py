@@ -234,3 +234,132 @@ class PriorityTaskQueue:
             })
         return snapshot
 
+
+class PriorityDispatcher:
+    """
+    Asynchronous QoS task dispatcher.
+    Consumes tasks from PriorityTaskQueue and orchestrates execution across worker mesh nodes.
+    """
+
+    def __init__(
+        self,
+        scheduler: Any,
+        concurrency: int = 5,
+        queue: Optional[PriorityTaskQueue] = None,
+    ):
+        self.scheduler = scheduler
+        self.concurrency = max(1, concurrency)
+        self.queue = queue or PriorityTaskQueue()
+        self._workers: List[asyncio.Task] = []
+        self._running = False
+        self._total_wait_time_ms = 0.0
+        self._processed_tasks_count = 0
+
+    @property
+    def metrics(self) -> PriorityMetrics:
+        """Access QoS metrics."""
+        return self.queue.metrics
+
+    async def start(self) -> None:
+        """Start background worker pool."""
+        if self._running:
+            return
+        self._running = True
+        self._workers = [
+            asyncio.create_task(self._worker_loop(i))
+            for i in range(self.concurrency)
+        ]
+        logger.debug(f"Started {self.concurrency} priority dispatcher worker(s).")
+
+    async def stop(self) -> None:
+        """Stop background worker pool."""
+        self._running = False
+        for w in self._workers:
+            w.cancel()
+        if self._workers:
+            await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers.clear()
+
+    async def submit(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        priority: TaskPriority = TaskPriority.NORMAL,
+        deadline: Optional[float] = None,
+        timeout: Optional[float] = None,
+        task_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> asyncio.Future:
+        """
+        Submit a prioritized callable for asynchronous cluster dispatch.
+        Returns a Future that resolves with the execution result.
+        """
+        import uuid
+        tid = task_id or f"ptask_{uuid.uuid4().hex[:8]}"
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+
+        task = PrioritizedTask(
+            task_id=tid,
+            func=func,
+            args=args,
+            kwargs=kwargs,
+            base_priority=priority,
+            deadline=deadline,
+            timeout=timeout,
+            future=fut,
+        )
+
+        await self.queue.push(task)
+        return fut
+
+    async def _worker_loop(self, worker_id: int) -> None:
+        """Background coroutine consuming prioritized tasks from the queue."""
+        while self._running:
+            try:
+                task = await self.queue.pop()
+                if task.cancelled:
+                    self.queue.metrics.total_cancelled += 1
+                    if task.future and not task.future.done():
+                        task.future.cancel()
+                    continue
+
+                # Record wait time
+                wait_ms = task.age_seconds * 1000.0
+                self._total_wait_time_ms += wait_ms
+                self._processed_tasks_count += 1
+                self.queue.metrics.avg_wait_time_ms = round(
+                    self._total_wait_time_ms / max(1, self._processed_tasks_count), 2
+                )
+
+                # Execute task via scheduler or direct callable
+                try:
+                    if hasattr(self.scheduler, "dispatch_task"):
+                        result = await self.scheduler.dispatch_task(
+                            task.func,
+                            *task.args,
+                            **task.kwargs,
+                        )
+                    else:
+                        # Fallback for direct testing callable
+                        res = task.func(*task.args, **task.kwargs)
+                        if asyncio.iscoroutine(res):
+                            result = await res
+                        else:
+                            result = res
+
+                    self.queue.metrics.total_completed += 1
+                    if task.future and not task.future.done():
+                        task.future.set_result(result)
+                except Exception as exc:
+                    self.queue.metrics.total_failed += 1
+                    if task.future and not task.future.done():
+                        task.future.set_exception(exc)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Worker {worker_id} encountered unexpected error: {e}", exc_info=True)
+                await asyncio.sleep(0.1)
+
+
