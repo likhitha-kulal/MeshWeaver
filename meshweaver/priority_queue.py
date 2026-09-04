@@ -39,6 +39,31 @@ class PriorityMetrics:
     tasks_by_priority: Dict[int, int] = field(default_factory=lambda: {p.value: 0 for p in TaskPriority})
 
 
+def calculate_deadline_urgency(
+    deadline: Optional[float],
+    current_time: Optional[float] = None,
+    deadline_boost_weight: float = 2.0,
+    critical_threshold_seconds: float = 5.0,
+) -> float:
+    """
+    Computes priority promotion offset for tasks with impending deadlines.
+    Returns the numeric boost (subtracted from priority score).
+    """
+    if deadline is None:
+        return 0.0
+
+    now = current_time if current_time is not None else time.time()
+    remaining = deadline - now
+
+    if remaining <= 0:
+        # Overdue: maximum boost
+        return deadline_boost_weight * 2.0
+    elif remaining < critical_threshold_seconds:
+        urgency_factor = (critical_threshold_seconds - remaining) / critical_threshold_seconds
+        return deadline_boost_weight * urgency_factor
+    return 0.0
+
+
 @dataclass(order=False)
 class PrioritizedTask:
     """
@@ -66,6 +91,7 @@ class PrioritizedTask:
         self,
         aging_interval_seconds: float = 2.0,
         deadline_boost_weight: float = 2.0,
+        current_time: Optional[float] = None,
     ) -> float:
         """
         Calculates dynamic effective priority score (lower is higher priority).
@@ -73,24 +99,25 @@ class PrioritizedTask:
             P_eff = base_priority - (age / aging_interval) - deadline_urgency
         """
         score = float(self.base_priority.value)
+        now = current_time if current_time is not None else time.time()
 
         # 1. Starvation prevention: promote priority based on waiting duration
         if aging_interval_seconds > 0:
-            promotions = self.age_seconds / aging_interval_seconds
+            age = max(0.0, now - self.created_at)
+            promotions = age / aging_interval_seconds
             score -= promotions
 
         # 2. Deadline awareness: increase priority as deadline approaches
         if self.deadline is not None:
-            remaining = self.deadline - time.time()
-            if remaining <= 0:
-                # Past deadline: maximum promotion
-                score -= deadline_boost_weight * 2.0
-            elif remaining < 5.0:
-                # Approaching deadline within 5s
-                urgency = (5.0 - remaining) / 5.0
-                score -= deadline_boost_weight * urgency
+            boost = calculate_deadline_urgency(
+                deadline=self.deadline,
+                current_time=now,
+                deadline_boost_weight=deadline_boost_weight,
+            )
+            score -= boost
 
         return score
+
 
     def __lt__(self, other: "PrioritizedTask") -> bool:
         """Compare two tasks by effective priority, breaking ties using sequence (FIFO)."""
