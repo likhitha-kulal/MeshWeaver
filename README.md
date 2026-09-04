@@ -59,6 +59,12 @@ MeshWeaver provides peer discovery via Kademlia DHT routing, decentralized gossi
     - Proactive `HALF_OPEN` health probe trials after configurable recovery timeouts.
     - Fine-grained exception discrimination protecting transport circuits from user-level exceptions.
 
+11. **Multi-Tier Priority Task Queue & QoS Engine (`meshweaver.priority_queue`)**
+    - 5 QoS Precedence Tiers: `CRITICAL` (0), `HIGH` (1), `NORMAL` (2), `LOW` (3), `BACKGROUND` (4).
+    - Starvation-free dynamic aging promotion: $P_{\text{eff}} = P_{\text{base}} - \frac{\text{wait}}{T_{\text{aging}}} - \text{urgency}$.
+    - Impending deadline urgency boosting with instant preemption for time-sensitive queries.
+    - Asynchronous `PriorityDispatcher` worker pool and live QoS telemetry.
+
 ---
 
 ## 📦 Project Structure
@@ -71,14 +77,16 @@ MeshWeaver/
 │   ├── PROTOCOL_SPEC.md        # Wire protocol and framing spec
 │   ├── SCHEDULER_SPEC.md       # Load balancing & failover spec
 │   ├── MAPREDUCE_SPEC.md       # MapReduce & Pipeline DAG architecture
-│   └── CIRCUIT_BREAKER_SPEC.md # Circuit Breaker state machine & resilience spec
+│   ├── CIRCUIT_BREAKER_SPEC.md # Circuit Breaker state machine & resilience spec
+│   └── PRIORITY_SCHEDULER_SPEC.md # QoS Priority queue & starvation aging spec
 ├── examples/
 │   ├── distributed_word_count.py # Distributed MapReduce word count benchmark
 │   ├── monte_carlo_pi.py         # Distributed Monte Carlo Pi estimation
 │   ├── resilient_cluster_demo.py # Cluster fault tolerance & circuit breaker demo
-│   └── fault_injection_benchmark.py # Fault injection & stress benchmark suite
+│   ├── fault_injection_benchmark.py # Fault injection & stress benchmark suite
+│   └── priority_qos_demo.py      # Priority QoS & starvation aging demonstration
 ├── meshweaver/
-│   ├── __init__.py             # Public package exports (v0.3.5)
+│   ├── __init__.py             # Public package exports (v0.3.6)
 │   ├── models.py               # NodeID, NodeInfo, Message, TaskEnvelope, TaskResult
 │   ├── kbucket.py              # K-Bucket contact storage with LRU eviction
 │   ├── routing_table.py        # 160-bit Kademlia routing table
@@ -89,6 +97,7 @@ MeshWeaver/
 │   ├── task_serializer.py      # Cloudpickle serialization & execution engine
 │   ├── scheduler.py            # Intelligent task scheduler & failover engine
 │   ├── circuit_breaker.py      # Circuit Breaker fault isolation & state machine
+│   ├── priority_queue.py       # Priority Task Queue & QoS Dispatcher engine
 │   ├── task_cache.py           # DHT-backed result memoization & caching
 │   ├── batch_executor.py       # Distributed parallel map & batch runner
 │   ├── map_reduce.py           # Distributed MapReduce & tree_reduce engine
@@ -104,6 +113,7 @@ MeshWeaver/
 │       ├── test_gossip.py
 │       ├── test_scheduler.py
 │       ├── test_circuit_breaker.py
+│       ├── test_priority_queue.py
 │       ├── test_task_cache.py
 │       ├── test_batch_executor.py
 │       ├── test_map_reduce.py
@@ -111,7 +121,8 @@ MeshWeaver/
 │       ├── test_dht_network.py
 │       ├── test_cluster_scheduler.py
 │       ├── test_cluster_pipeline.py
-│       └── test_cluster_circuit_breaker.py
+│       ├── test_cluster_circuit_breaker.py
+│       └── test_cluster_priority.py
 ```
 
 ---
@@ -142,9 +153,18 @@ python node.py --host 127.0.0.1 --port 9020 --bootstrap-host 127.0.0.1 --bootstr
 python node.py --host 127.0.0.1 --port 9030 --bootstrap-host 127.0.0.1 --bootstrap-port 9000 --pipeline-demo
 ```
 
-### 5. Run Real-World Example Benchmarks
+### 5. Run Priority QoS Preemption Demo
 
 ```bash
+python node.py --host 127.0.0.1 --port 9040 --priority-demo
+```
+
+### 6. Run Real-World Example Benchmarks
+
+```bash
+# Priority QoS & Starvation-Free Aging Live Demo:
+python examples/priority_qos_demo.py
+
 # Distributed Word Count MapReduce:
 python examples/distributed_word_count.py
 
@@ -168,4 +188,4 @@ Run the full unit and integration test suite:
 python -m pytest
 # or via unittest:
 python -m unittest discover -s meshweaver/tests
-```
+```
