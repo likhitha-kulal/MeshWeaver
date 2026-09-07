@@ -67,6 +67,7 @@ class LeaderElectionEngine:
         self.send_message = send_message_fn or (lambda host, port, msg: None)
 
         self.state = ElectionState()
+        self._reset_election_timeout()
         self._running = False
         self._election_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
@@ -100,3 +101,11 @@ class LeaderElectionEngine:
     @property
     def current_leader(self) -> Optional[str]:
         return self.state.current_leader
+
+    def _reset_election_timeout(self) -> None:
+        """Calculate a randomized jittered election timeout between min and max bounds."""
+        self.state.election_timeout = random.uniform(
+            self.config.min_election_timeout,
+            self.config.max_election_timeout,
+        )
+        self.state.last_heartbeat_received = time.time()
