@@ -58,3 +58,69 @@ async def test_single_node_election_fast_path():
     assert engine.current_term == 1
     assert engine.elections_won == 1
     await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_vote_request_and_response():
+    engine = LeaderElectionEngine(node_id="voter_1")
+    
+    req = VoteRequest(term=1, candidate_id="candidate_a")
+    msg = Message(
+        type=MessageType.ELECTION_VOTE_REQUEST,
+        sender_id="candidate_a",
+        sender_udp_port=9000,
+        payload=req.to_dict(),
+    )
+    
+    resp_msg = engine.handle_vote_request(msg, ("127.0.0.1", 9000))
+    assert resp_msg is not None
+    resp = VoteResponse.from_dict(resp_msg.payload)
+    assert resp.vote_granted is True
+    assert resp.term == 1
+    assert resp.voter_id == "voter_1"
+    assert engine.state.voted_for == "candidate_a"
+
+    req2 = VoteRequest(term=1, candidate_id="candidate_b")
+    msg2 = Message(
+        type=MessageType.ELECTION_VOTE_REQUEST,
+        sender_id="candidate_b",
+        sender_udp_port=9001,
+        payload=req2.to_dict(),
+    )
+    resp_msg2 = engine.handle_vote_request(msg2, ("127.0.0.1", 9001))
+    resp2 = VoteResponse.from_dict(resp_msg2.payload)
+    assert resp2.vote_granted is False
+
+
+@pytest.mark.asyncio
+async def test_candidate_quorum_tally():
+    peers = [("127.0.0.1", 9001), ("127.0.0.1", 9002)]
+    sent_messages = []
+    
+    def send_fn(h, p, m):
+        sent_messages.append((h, p, m))
+        
+    engine = LeaderElectionEngine(
+        node_id="candidate_node",
+        get_active_peers_fn=lambda: peers,
+        send_message_fn=send_fn,
+    )
+    
+    await engine.start_election()
+    assert engine.role == ElectionRole.CANDIDATE
+    assert engine.current_term == 1
+    assert len(sent_messages) == 2
+    
+    vote_resp = VoteResponse(term=1, vote_granted=True, voter_id="peer_1")
+    resp_msg = Message(
+        type=MessageType.ELECTION_VOTE_RESPONSE,
+        sender_id="peer_1",
+        sender_udp_port=9001,
+        payload=vote_resp.to_dict(),
+    )
+    
+    await engine.handle_vote_response(resp_msg)
+    assert engine.role == ElectionRole.LEADER
+    assert engine.is_leader
+    assert engine.current_leader == "candidate_node"
+    await engine.stop()
