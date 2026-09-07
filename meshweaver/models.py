@@ -118,6 +118,13 @@ class NodeInfo:
         return hash(self.node_id)
 
 
+class ElectionRole(str, Enum):
+    """Consensus roles in distributed leader election."""
+    FOLLOWER = "FOLLOWER"
+    CANDIDATE = "CANDIDATE"
+    LEADER = "LEADER"
+
+
 class MessageType(str, Enum):
     """RPC and network control message types."""
     PING = "PING"
