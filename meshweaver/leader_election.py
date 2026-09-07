@@ -210,3 +210,51 @@ class LeaderElectionEngine:
                 self.send_message(host, port, msg)
             except Exception as e:
                 logger.debug(f"Failed to dispatch vote request to {host}:{port}: {e}")
+
+    def handle_vote_request(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        """Evaluate incoming VoteRequest and return VoteResponse."""
+        try:
+            req = VoteRequest.from_dict(msg.payload)
+        except Exception as e:
+            logger.warning(f"Malformed VoteRequest received: {e}")
+            return None
+
+        # Rule 1: If term < current_term, reject vote
+        if req.term < self.state.current_term:
+            resp = VoteResponse(
+                term=self.state.current_term,
+                vote_granted=False,
+                voter_id=self.node_id,
+            )
+            return Message(
+                msg_id=msg.msg_id,
+                type=MessageType.ELECTION_VOTE_RESPONSE,
+                sender_id=self.node_id,
+                sender_udp_port=0,
+                payload=resp.to_dict(),
+            )
+
+        # Rule 2: If term > current_term, update term and step down to follower
+        if req.term > self.state.current_term:
+            self.step_down(req.term)
+
+        # Rule 3: Grant vote if not yet voted for another candidate in this term
+        can_vote = (self.state.voted_for is None or self.state.voted_for == req.candidate_id)
+        if can_vote:
+            self.state.voted_for = req.candidate_id
+            self.state.last_heartbeat_received = time.time()
+            self.total_votes_granted += 1
+            logger.info(f"Node {self.node_id[:8]} granted vote to {req.candidate_id[:8]} for Term {req.term}")
+
+        resp = VoteResponse(
+            term=self.state.current_term,
+            vote_granted=can_vote,
+            voter_id=self.node_id,
+        )
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.ELECTION_VOTE_RESPONSE,
+            sender_id=self.node_id,
+            sender_udp_port=0,
+            payload=resp.to_dict(),
+        )
