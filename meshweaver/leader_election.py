@@ -410,3 +410,13 @@ class LeaderElectionEngine:
                     cb(self.state.current_term)
                 except Exception as e:
                     logger.error(f"Error in step down callback: {e}")
+
+    def add_leader_elected_callback(self, cb: Callable[[str, int], None]) -> None:
+        self._on_leader_elected_callbacks.append(cb)
+
+    def add_step_down_callback(self, cb: Callable[[int], None]) -> None:
+        self._on_step_down_callbacks.append(cb)
+
+    def trigger_election(self) -> None:
+        """Manually trigger an immediate election cycle."""
+        asyncio.create_task(self.start_election())
