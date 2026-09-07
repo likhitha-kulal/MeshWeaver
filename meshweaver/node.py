@@ -105,6 +105,27 @@ class MeshNode:
             tcp_port=self.bound_tcp_port,
         )
 
+    
+    @property
+    def is_leader(self) -> bool:
+        return self.leader_election.is_leader
+
+    @property
+    def leader_id(self) -> Optional[str]:
+        return self.leader_election.current_leader
+
+    @property
+    def election_role(self) -> ElectionRole:
+        return self.leader_election.role
+
+    async def trigger_election(self) -> None:
+        """Trigger an immediate leader election."""
+        await self.leader_election.start_election()
+
+    def get_consensus_metrics(self) -> ConsensusMetrics:
+        """Retrieve real-time leader election metrics snapshot."""
+        return self.leader_election.get_consensus_metrics()
+
     def _get_active_peers_for_consensus(self) -> List[Tuple[str, int]]:
         peers = []
         for p in self.gossip_manager.get_active_peers():
