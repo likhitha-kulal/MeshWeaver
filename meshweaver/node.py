@@ -334,6 +334,8 @@ async def run_cli():
     parser.add_argument("--bootstrap-host", default=None, help="Bootstrap peer host IP")
     parser.add_argument("--bootstrap-port", type=int, default=None, help="Bootstrap peer UDP port")
 
+    parser.add_argument("--leader-demo", action="store_true", help="Run consensus leader election demo")
+    parser.add_argument("--priority-demo", action="store_true", help="Run priority QoS demonstration")
     args = parser.parse_args()
 
     node = MeshNode(host=args.host, udp_port=args.port, tcp_port=args.tcp_port)
@@ -341,6 +343,12 @@ async def run_cli():
 
     if args.bootstrap_host and args.bootstrap_port:
         await node.bootstrap(args.bootstrap_host, args.bootstrap_port)
+
+    if args.leader_demo:
+        print("Starting Leader Election Demo on node...")
+        await node.trigger_election()
+        await asyncio.sleep(2.0)
+        print("Consensus Metrics:", node.get_consensus_metrics().to_dict())
 
     try:
         while True:
