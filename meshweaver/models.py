@@ -222,6 +222,29 @@ class LeaderHeartbeat:
 
 
 @dataclass
+class LeaderHeartbeatAck:
+    """Follower acknowledgment confirming receipt of leader heartbeat lease."""
+    term: int
+    node_id: str
+    accepted: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "node_id": self.node_id,
+            "accepted": self.accepted,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LeaderHeartbeatAck":
+        return cls(
+            term=int(data["term"]),
+            node_id=data["node_id"],
+            accepted=bool(data["accepted"]),
+        )
+
+
+@dataclass
 class Message:
     """Network datagram message container."""
     type: MessageType
