@@ -258,3 +258,59 @@ class LeaderElectionEngine:
             sender_udp_port=0,
             payload=resp.to_dict(),
         )
+
+    async def handle_vote_response(self, msg: Message) -> None:
+        """Process incoming VoteResponse and tally quorum for leader promotion."""
+        try:
+            resp = VoteResponse.from_dict(msg.payload)
+        except Exception as e:
+            logger.warning(f"Malformed VoteResponse received: {e}")
+            return
+
+        # If higher term discovered, immediately step down
+        if resp.term > self.state.current_term:
+            self.step_down(resp.term)
+            return
+
+        if self.state.role != ElectionRole.CANDIDATE or resp.term != self.state.current_term:
+            return
+
+        if resp.vote_granted:
+            self.state.votes_received.add(resp.voter_id)
+            active_peers = self.get_active_peers()
+            total_cluster_size = len(active_peers) + 1
+            required_quorum = (total_cluster_size // 2) + 1
+
+            logger.info(
+                f"Node {self.node_id[:8]} received vote from {resp.voter_id[:8]}. "
+                f"Tally: {len(self.state.votes_received)}/{required_quorum}"
+            )
+
+            if len(self.state.votes_received) >= required_quorum:
+                await self._promote_to_leader(time.time() - 0.05)
+
+    async def _promote_to_leader(self, start_ts: float) -> None:
+        """Promote node to LEADER role and launch periodic heartbeat lease broadcaster."""
+        if self.state.role == ElectionRole.LEADER:
+            return
+
+        self.state.role = ElectionRole.LEADER
+        self.state.current_leader = self.node_id
+        self.elections_won += 1
+        self.terms_served += 1
+        self.last_election_duration_ms = (time.time() - start_ts) * 1000.0
+
+        logger.info(
+            f"👑 Node {self.node_id[:8]} PROMOTED TO LEADER for Term {self.state.current_term}! "
+            f"Duration: {self.last_election_duration_ms:.2f}ms"
+        )
+
+        for cb in self._on_leader_elected_callbacks:
+            try:
+                cb(self.node_id, self.state.current_term)
+            except Exception as e:
+                logger.error(f"Error in leader elected callback: {e}")
+
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+        self._heartbeat_task = asyncio.create_task(self._leader_heartbeat_loop())
