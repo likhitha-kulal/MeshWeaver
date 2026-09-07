@@ -46,3 +46,57 @@ class ElectionState:
     last_heartbeat_received: float = field(default_factory=time.time)
     lease_expires_at: float = 0.0
     election_timeout: float = 0.300
+
+
+class LeaderElectionEngine:
+    """
+    Decentralized Leader Election Engine implementing randomized timeouts,
+    term-based voting, quorum promotion, and heartbeat lease renewals.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        config: Optional[ElectionConfig] = None,
+        get_active_peers_fn: Optional[Callable[[], List[Tuple[str, int]]]] = None,
+        send_message_fn: Optional[Callable[[str, int, Message], None]] = None,
+    ):
+        self.node_id = node_id
+        self.config = config or ElectionConfig()
+        self.get_active_peers = get_active_peers_fn or (lambda: [])
+        self.send_message = send_message_fn or (lambda host, port, msg: None)
+
+        self.state = ElectionState()
+        self._running = False
+        self._election_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
+
+        # Metrics
+        self.elections_started = 0
+        self.elections_won = 0
+        self.terms_served = 0
+        self.total_votes_requested = 0
+        self.total_votes_granted = 0
+        self.heartbeats_sent = 0
+        self.heartbeats_received = 0
+        self.last_election_duration_ms = 0.0
+
+        # Callbacks
+        self._on_leader_elected_callbacks: List[Callable[[str, int], None]] = []
+        self._on_step_down_callbacks: List[Callable[[int], None]] = []
+
+    @property
+    def role(self) -> ElectionRole:
+        return self.state.role
+
+    @property
+    def is_leader(self) -> bool:
+        return self.state.role == ElectionRole.LEADER
+
+    @property
+    def current_term(self) -> int:
+        return self.state.current_term
+
+    @property
+    def current_leader(self) -> Optional[str]:
+        return self.state.current_leader
