@@ -314,3 +314,39 @@ class LeaderElectionEngine:
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
         self._heartbeat_task = asyncio.create_task(self._leader_heartbeat_loop())
+
+    async def _leader_heartbeat_loop(self) -> None:
+        """Broadcasts periodic heartbeat leases to all cluster peers."""
+        while self._running and self.state.role == ElectionRole.LEADER:
+            try:
+                self.broadcast_heartbeat()
+                await asyncio.sleep(self.config.heartbeat_interval)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in leader heartbeat loop: {e}", exc_info=True)
+
+    def broadcast_heartbeat(self) -> None:
+        """Send a LeaderHeartbeat message to all active peers."""
+        if self.state.role != ElectionRole.LEADER:
+            return
+
+        heartbeat = LeaderHeartbeat(
+            term=self.state.current_term,
+            leader_id=self.node_id,
+            lease_duration=self.config.lease_duration,
+        )
+        msg = Message(
+            type=MessageType.LEADER_HEARTBEAT,
+            sender_id=self.node_id,
+            sender_udp_port=0,
+            payload=heartbeat.to_dict(),
+        )
+
+        active_peers = self.get_active_peers()
+        for host, port in active_peers:
+            try:
+                self.send_message(host, port, msg)
+                self.heartbeats_sent += 1
+            except Exception as e:
+                logger.debug(f"Failed to send heartbeat to {host}:{port}: {e}")
