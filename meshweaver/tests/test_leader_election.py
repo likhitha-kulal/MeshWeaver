@@ -35,3 +35,26 @@ def test_election_models_serialization():
     ack = LeaderHeartbeatAck(term=4, node_id="node_b", accepted=True)
     ack_restored = LeaderHeartbeatAck.from_dict(ack.to_dict())
     assert ack_restored.accepted is True
+
+
+@pytest.mark.asyncio
+async def test_election_state_and_config():
+    config = ElectionConfig(min_election_timeout=0.1, max_election_timeout=0.2)
+    engine = LeaderElectionEngine(node_id="node_1", config=config)
+    assert engine.role == ElectionRole.FOLLOWER
+    assert not engine.is_leader
+    assert engine.current_term == 0
+    assert engine.current_leader is None
+    assert 0.1 <= engine.state.election_timeout <= 0.2
+
+
+@pytest.mark.asyncio
+async def test_single_node_election_fast_path():
+    engine = LeaderElectionEngine(node_id="node_solo", get_active_peers_fn=lambda: [])
+    await engine.start_election()
+    assert engine.role == ElectionRole.LEADER
+    assert engine.is_leader
+    assert engine.current_leader == "node_solo"
+    assert engine.current_term == 1
+    assert engine.elections_won == 1
+    await engine.stop()
