@@ -14,8 +14,27 @@ from meshweaver.circuit_breaker import (
 from meshweaver.gossip import GossipManager, PeerLoadSnapshot
 from meshweaver.dht_storage import DHTStorage
 from meshweaver.kbucket import KBucket
+from meshweaver.leader_election import (
+    ConsensusMetrics,
+    ElectionConfig,
+    ElectionRole,
+    ElectionState,
+    LeaderElectionEngine,
+)
 from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
-from meshweaver.models import Message, MessageType, NodeID, NodeInfo, TaskEnvelope, TaskResult
+from meshweaver.models import (
+    ElectionRole,
+    LeaderHeartbeat,
+    LeaderHeartbeatAck,
+    Message,
+    MessageType,
+    NodeID,
+    NodeInfo,
+    TaskEnvelope,
+    TaskResult,
+    VoteRequest,
+    VoteResponse,
+)
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.node import MeshNode
 from meshweaver.node_lookup import NodeLookup
@@ -38,7 +57,7 @@ from meshweaver.scheduler import (
 from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
-__version__ = "0.3.6"
+__version__ = "0.4.0"
 
 __all__ = [
     "NodeID",
@@ -47,6 +66,15 @@ __all__ = [
     "Message",
     "TaskEnvelope",
     "TaskResult",
+    "ElectionRole",
+    "VoteRequest",
+    "VoteResponse",
+    "LeaderHeartbeat",
+    "LeaderHeartbeatAck",
+    "LeaderElectionEngine",
+    "ElectionConfig",
+    "ElectionState",
+    "ConsensusMetrics",
     "KBucket",
     "RoutingTable",
     "GossipManager",
@@ -86,4 +114,3 @@ __all__ = [
     "PriorityDispatcher",
     "PriorityMetrics",
 ]
-

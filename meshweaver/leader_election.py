@@ -297,6 +297,8 @@ class LeaderElectionEngine:
 
     async def handle_vote_response(self, msg: Message) -> None:
         """Process incoming VoteResponse and tally quorum for leader promotion."""
+        if msg.type != MessageType.ELECTION_VOTE_RESPONSE or "vote_granted" not in msg.payload:
+            return
         try:
             resp = VoteResponse.from_dict(msg.payload)
         except Exception as e:
