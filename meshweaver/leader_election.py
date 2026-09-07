@@ -167,3 +167,28 @@ class LeaderElectionEngine:
                 break
             except Exception as e:
                 logger.error(f"Error in election timer loop: {e}", exc_info=True)
+
+    async def start_election(self) -> None:
+        """Transition to CANDIDATE, increment term, vote for self, and broadcast VoteRequests."""
+        start_ts = time.time()
+        self.state.role = ElectionRole.CANDIDATE
+        self.state.current_term += 1
+        self.state.voted_for = self.node_id
+        self.state.votes_received = {self.node_id}
+        self.state.current_leader = None
+        self.elections_started += 1
+        self._reset_election_timeout()
+
+        active_peers = self.get_active_peers()
+        total_cluster_size = len(active_peers) + 1  # Peers + self
+        required_quorum = (total_cluster_size // 2) + 1
+
+        logger.info(
+            f"Node {self.node_id[:8]} started election for Term {self.state.current_term}. "
+            f"Peers: {len(active_peers)}, Required Quorum: {required_quorum}"
+        )
+
+        # Single-node cluster fast-path
+        if total_cluster_size == 1 or len(active_peers) == 0:
+            await self._promote_to_leader(start_ts)
+            return
