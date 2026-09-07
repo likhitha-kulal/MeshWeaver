@@ -389,3 +389,24 @@ class LeaderElectionEngine:
             sender_udp_port=0,
             payload=ack.to_dict(),
         )
+
+    def step_down(self, new_term: int) -> None:
+        """Demote to FOLLOWER on observing higher term or cluster abdication."""
+        old_role = self.state.role
+        self.state.role = ElectionRole.FOLLOWER
+        self.state.current_term = max(self.state.current_term, new_term)
+        self.state.voted_for = None
+        self.state.votes_received.clear()
+        self._reset_election_timeout()
+
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
+        if old_role == ElectionRole.LEADER:
+            logger.warning(f"Leader {self.node_id[:8]} stepped down to FOLLOWER in Term {self.state.current_term}")
+            for cb in self._on_step_down_callbacks:
+                try:
+                    cb(self.state.current_term)
+                except Exception as e:
+                    logger.error(f"Error in step down callback: {e}")
