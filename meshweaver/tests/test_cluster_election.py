@@ -41,3 +41,42 @@ async def test_three_node_cluster_leader_election():
     finally:
         for n in nodes:
             await n.stop()
+
+
+@pytest.mark.asyncio
+async def test_cluster_leader_failover():
+    node1 = MeshNode(host="127.0.0.1", udp_port=19300, tcp_port=19301)
+    node2 = MeshNode(host="127.0.0.1", udp_port=19310, tcp_port=19311)
+    
+    nodes = [node1, node2]
+    for n in nodes:
+        await n.start()
+        n.leader_election.config.min_election_timeout = 0.150
+        n.leader_election.config.max_election_timeout = 0.250
+        n.leader_election.config.heartbeat_interval = 0.040
+
+    try:
+        await node2.bootstrap("127.0.0.1", 19300)
+        await asyncio.sleep(0.1)
+
+        await node1.trigger_election()
+        await asyncio.sleep(0.3)
+        assert node1.is_leader or node2.is_leader
+
+        if node1.is_leader:
+            await node1.stop()
+            await node2.trigger_election()
+            await asyncio.sleep(0.35)
+            assert node2.is_leader
+        else:
+            await node2.stop()
+            await node1.trigger_election()
+            await asyncio.sleep(0.35)
+            assert node1.is_leader
+
+    finally:
+        for n in [node1, node2]:
+            try:
+                await n.stop()
+            except Exception:
+                pass
