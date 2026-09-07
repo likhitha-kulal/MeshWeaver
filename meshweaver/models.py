@@ -173,6 +173,29 @@ class VoteRequest:
 
 
 @dataclass
+class VoteResponse:
+    """RPC payload returned by peers responding to vote requests."""
+    term: int
+    vote_granted: bool
+    voter_id: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "vote_granted": self.vote_granted,
+            "voter_id": self.voter_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "VoteResponse":
+        return cls(
+            term=int(data["term"]),
+            vote_granted=bool(data["vote_granted"]),
+            voter_id=data["voter_id"],
+        )
+
+
+@dataclass
 class Message:
     """Network datagram message container."""
     type: MessageType
