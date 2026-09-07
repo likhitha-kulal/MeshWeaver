@@ -192,3 +192,21 @@ class LeaderElectionEngine:
         if total_cluster_size == 1 or len(active_peers) == 0:
             await self._promote_to_leader(start_ts)
             return
+
+        vote_req = VoteRequest(
+            term=self.state.current_term,
+            candidate_id=self.node_id,
+        )
+        msg = Message(
+            type=MessageType.ELECTION_VOTE_REQUEST,
+            sender_id=self.node_id,
+            sender_udp_port=0,
+            payload=vote_req.to_dict(),
+        )
+
+        self.total_votes_requested += len(active_peers)
+        for host, port in active_peers:
+            try:
+                self.send_message(host, port, msg)
+            except Exception as e:
+                logger.debug(f"Failed to dispatch vote request to {host}:{port}: {e}")
