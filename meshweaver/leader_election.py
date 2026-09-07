@@ -350,3 +350,42 @@ class LeaderElectionEngine:
                 self.heartbeats_sent += 1
             except Exception as e:
                 logger.debug(f"Failed to send heartbeat to {host}:{port}: {e}")
+
+    def handle_leader_heartbeat(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        """Process incoming LeaderHeartbeat from cluster leader."""
+        try:
+            hb = LeaderHeartbeat.from_dict(msg.payload)
+        except Exception as e:
+            logger.warning(f"Malformed LeaderHeartbeat received: {e}")
+            return None
+
+        # Rule 1: If term < current_term, reject heartbeat
+        if hb.term < self.state.current_term:
+            ack = LeaderHeartbeatAck(term=self.state.current_term, node_id=self.node_id, accepted=False)
+            return Message(
+                msg_id=msg.msg_id,
+                type=MessageType.LEADER_HEARTBEAT_ACK,
+                sender_id=self.node_id,
+                sender_udp_port=0,
+                payload=ack.to_dict(),
+            )
+
+        # Rule 2: If term >= current_term, acknowledge leader and reset timer
+        if hb.term > self.state.current_term:
+            self.step_down(hb.term)
+        elif self.state.role == ElectionRole.CANDIDATE:
+            self.step_down(hb.term)
+
+        self.state.current_leader = hb.leader_id
+        self.state.last_heartbeat_received = time.time()
+        self.state.lease_expires_at = time.time() + hb.lease_duration
+        self.heartbeats_received += 1
+
+        ack = LeaderHeartbeatAck(term=self.state.current_term, node_id=self.node_id, accepted=True)
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.LEADER_HEARTBEAT_ACK,
+            sender_id=self.node_id,
+            sender_udp_port=0,
+            payload=ack.to_dict(),
+        )
