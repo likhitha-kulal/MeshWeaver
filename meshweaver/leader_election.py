@@ -48,6 +48,42 @@ class ElectionState:
     election_timeout: float = 0.300
 
 
+
+@dataclass
+class ConsensusMetrics:
+    """Real-time observability snapshot for leader election metrics."""
+    node_id: str
+    role: str
+    current_term: int
+    current_leader: Optional[str]
+    is_leader: bool
+    elections_started: int
+    elections_won: int
+    terms_served: int
+    total_votes_requested: int
+    total_votes_granted: int
+    heartbeats_sent: int
+    heartbeats_received: int
+    last_election_duration_ms: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "role": self.role,
+            "current_term": self.current_term,
+            "current_leader": self.current_leader,
+            "is_leader": self.is_leader,
+            "elections_started": self.elections_started,
+            "elections_won": self.elections_won,
+            "terms_served": self.terms_served,
+            "total_votes_requested": self.total_votes_requested,
+            "total_votes_granted": self.total_votes_granted,
+            "heartbeats_sent": self.heartbeats_sent,
+            "heartbeats_received": self.heartbeats_received,
+            "last_election_duration_ms": self.last_election_duration_ms,
+        }
+
+
 class LeaderElectionEngine:
     """
     Decentralized Leader Election Engine implementing randomized timeouts,
@@ -420,3 +456,21 @@ class LeaderElectionEngine:
     def trigger_election(self) -> None:
         """Manually trigger an immediate election cycle."""
         asyncio.create_task(self.start_election())
+
+    def get_consensus_metrics(self) -> ConsensusMetrics:
+        """Capture real-time consensus telemetry snapshot."""
+        return ConsensusMetrics(
+            node_id=self.node_id,
+            role=self.state.role.value,
+            current_term=self.state.current_term,
+            current_leader=self.state.current_leader,
+            is_leader=self.is_leader,
+            elections_started=self.elections_started,
+            elections_won=self.elections_won,
+            terms_served=self.terms_served,
+            total_votes_requested=self.total_votes_requested,
+            total_votes_granted=self.total_votes_granted,
+            heartbeats_sent=self.heartbeats_sent,
+            heartbeats_received=self.heartbeats_received,
+            last_election_duration_ms=self.last_election_duration_ms,
+        )
