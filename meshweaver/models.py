@@ -147,6 +147,32 @@ class MessageType(str, Enum):
 
 
 @dataclass
+class VoteRequest:
+    """RPC payload sent by candidates requesting peer votes."""
+    term: int
+    candidate_id: str
+    last_log_index: int = 0
+    last_log_term: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "candidate_id": self.candidate_id,
+            "last_log_index": self.last_log_index,
+            "last_log_term": self.last_log_term,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "VoteRequest":
+        return cls(
+            term=int(data["term"]),
+            candidate_id=data["candidate_id"],
+            last_log_index=int(data.get("last_log_index", 0)),
+            last_log_term=int(data.get("last_log_term", 0)),
+        )
+
+
+@dataclass
 class Message:
     """Network datagram message container."""
     type: MessageType
