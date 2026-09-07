@@ -196,6 +196,32 @@ class VoteResponse:
 
 
 @dataclass
+class LeaderHeartbeat:
+    """Heartbeat lease message broadcast periodically by the active leader."""
+    term: int
+    leader_id: str
+    lease_duration: float
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "leader_id": self.leader_id,
+            "lease_duration": self.lease_duration,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LeaderHeartbeat":
+        return cls(
+            term=int(data["term"]),
+            leader_id=data["leader_id"],
+            lease_duration=float(data["lease_duration"]),
+            timestamp=float(data.get("timestamp", time.time())),
+        )
+
+
+@dataclass
 class Message:
     """Network datagram message container."""
     type: MessageType
