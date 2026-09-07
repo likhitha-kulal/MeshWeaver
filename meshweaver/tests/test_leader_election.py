@@ -144,3 +144,39 @@ async def test_step_down_on_higher_term():
     assert engine.role == ElectionRole.FOLLOWER
     assert engine.current_term == 5
     assert engine.state.voted_for == "newer_leader"
+
+
+@pytest.mark.asyncio
+async def test_leader_heartbeat_and_lease():
+    engine = LeaderElectionEngine(node_id="follower_1")
+    
+    hb = LeaderHeartbeat(term=2, leader_id="leader_x", lease_duration=0.5)
+    hb_msg = Message(
+        type=MessageType.LEADER_HEARTBEAT,
+        sender_id="leader_x",
+        sender_udp_port=9000,
+        payload=hb.to_dict(),
+    )
+    
+    ack_msg = engine.handle_leader_heartbeat(hb_msg, ("127.0.0.1", 9000))
+    assert ack_msg is not None
+    ack = LeaderHeartbeatAck.from_dict(ack_msg.payload)
+    assert ack.accepted is True
+    assert engine.current_leader == "leader_x"
+    assert engine.current_term == 2
+    assert engine.state.lease_expires_at > time.time()
+
+
+@pytest.mark.asyncio
+async def test_consensus_metrics():
+    engine = LeaderElectionEngine(node_id="metrics_node", get_active_peers_fn=lambda: [])
+    await engine.start_election()
+    metrics = engine.get_consensus_metrics()
+    assert isinstance(metrics, ConsensusMetrics)
+    assert metrics.is_leader is True
+    assert metrics.current_term == 1
+    assert metrics.elections_won == 1
+    metrics_dict = metrics.to_dict()
+    assert metrics_dict["node_id"] == "metrics_node"
+    assert metrics_dict["role"] == "LEADER"
+    await engine.stop()
