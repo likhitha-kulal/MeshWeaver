@@ -124,3 +124,23 @@ async def test_candidate_quorum_tally():
     assert engine.is_leader
     assert engine.current_leader == "candidate_node"
     await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_step_down_on_higher_term():
+    engine = LeaderElectionEngine(node_id="node_term_test")
+    engine.state.role = ElectionRole.LEADER
+    engine.state.current_term = 2
+    
+    req = VoteRequest(term=5, candidate_id="newer_leader")
+    msg = Message(
+        type=MessageType.ELECTION_VOTE_REQUEST,
+        sender_id="newer_leader",
+        sender_udp_port=9000,
+        payload=req.to_dict(),
+    )
+    
+    engine.handle_vote_request(msg, ("127.0.0.1", 9000))
+    assert engine.role == ElectionRole.FOLLOWER
+    assert engine.current_term == 5
+    assert engine.state.voted_for == "newer_leader"
