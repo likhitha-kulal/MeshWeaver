@@ -109,3 +109,61 @@ class LeaderElectionEngine:
             self.config.max_election_timeout,
         )
         self.state.last_heartbeat_received = time.time()
+
+    async def start(self) -> None:
+        """Start the background consensus timer loop."""
+        if self._running:
+            return
+        self._running = True
+        self._reset_election_timeout()
+        if self.config.auto_election:
+            self._election_task = asyncio.create_task(self._election_timer_loop())
+        logger.info(f"LeaderElectionEngine started for node {self.node_id[:8]} in term {self.state.current_term}")
+
+    async def stop(self) -> None:
+        """Gracefully stop background consensus tasks."""
+        self._running = False
+        if self._election_task:
+            self._election_task.cancel()
+            try:
+                await self._election_task
+            except asyncio.CancelledError:
+                pass
+            self._election_task = None
+
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._heartbeat_task = None
+        logger.info(f"LeaderElectionEngine stopped for node {self.node_id[:8]}")
+
+    async def _election_timer_loop(self) -> None:
+        """Periodic background evaluation checking for leader heartbeat timeouts."""
+        while self._running:
+            try:
+                await asyncio.sleep(0.020)
+                now = time.time()
+                elapsed = now - self.state.last_heartbeat_received
+
+                if self.state.role == ElectionRole.FOLLOWER:
+                    if elapsed > self.state.election_timeout:
+                        logger.warning(
+                            f"Node {self.node_id[:8]} election timeout ({elapsed:.3f}s > {self.state.election_timeout:.3f}s). "
+                            f"Starting election."
+                        )
+                        await self.start_election()
+
+                elif self.state.role == ElectionRole.CANDIDATE:
+                    if elapsed > self.state.election_timeout:
+                        logger.warning(
+                            f"Node {self.node_id[:8]} candidate timeout in term {self.state.current_term}. Restarting election."
+                        )
+                        await self.start_election()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in election timer loop: {e}", exc_info=True)
