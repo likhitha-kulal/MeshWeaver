@@ -268,3 +268,59 @@ class ReplicatedStateMachine:
     def active_lock_count(self) -> int:
         now = time.time()
         return sum(1 for l in self._locks.values() if not l.is_expired(now))
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Local non-mutating query on current state machine view."""
+        return self._state.get(key, default)
+
+    def contains(self, key: str) -> bool:
+        return key in self._state
+
+    def get_all_keys(self) -> List[str]:
+        return list(self._state.keys())
+
+    def apply_command(self, entry: LogEntry) -> Any:
+        """
+        Deterministically apply a committed LogEntry to the state machine.
+        Returns the command execution result.
+        """
+        self._commands_applied += 1
+        cmd = entry.command_type
+
+        if cmd == RaftCommandType.SET:
+            if entry.key is not None:
+                self._state[entry.key] = entry.value
+            return entry.value
+
+        elif cmd == RaftCommandType.GET:
+            return self._state.get(entry.key) if entry.key else None
+
+        elif cmd == RaftCommandType.DELETE:
+            if entry.key is not None:
+                return self._state.pop(entry.key, None)
+            return None
+
+        elif cmd == RaftCommandType.CAS:
+            # Compare-and-swap
+            if entry.key is None:
+                return False
+            expected = entry.extra_data.get("expected")
+            current = self._state.get(entry.key)
+            if current == expected:
+                self._state[entry.key] = entry.value
+                return True
+            return False
+
+        elif cmd == RaftCommandType.INCREMENT:
+            if entry.key is None:
+                return 0
+            delta = int(entry.extra_data.get("delta", 1))
+            current = int(self._state.get(entry.key, 0))
+            new_val = current + delta
+            self._state[entry.key] = new_val
+            return new_val
+
+        elif cmd == RaftCommandType.NOOP:
+            return "NOOP_APPLIED"
+
+        return None
