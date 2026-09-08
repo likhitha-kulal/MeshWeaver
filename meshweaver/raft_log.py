@@ -757,3 +757,23 @@ class RaftReplicationEngine:
         except asyncio.TimeoutError:
             self._pending_proposals.pop(entry.index, None)
             raise TimeoutError(f"Proposal for index {entry.index} timed out waiting for consensus quorum after {timeout}s")
+
+    def get_raft_metrics(self) -> RaftMetrics:
+        """Capture live Raft log replication and state machine metrics."""
+        term, role = self.get_term_and_role()
+        return RaftMetrics(
+            node_id=self.node_id,
+            role=role,
+            current_term=term,
+            last_log_index=self.log.last_index,
+            last_log_term=self.log.last_term,
+            commit_index=self.log.commit_index,
+            last_applied=self.log.last_applied,
+            total_proposals=self.total_proposals,
+            total_committed=self.total_committed,
+            total_replications_sent=self.total_replications_sent,
+            replication_successes=self.replication_successes,
+            replication_failures=self.replication_failures,
+            active_locks_count=self.state_machine.active_lock_count,
+            state_keys_count=self.state_machine.key_count,
+        )
