@@ -82,3 +82,60 @@ def test_follower_append_entries_stale_term_rejected():
     resp = AppendEntriesResponse.from_dict(resp_msg.payload)
     assert resp.success is False
     assert resp.term == 3
+
+
+def test_leader_quorum_commit_advancement():
+    log = RaftLog()
+    sm = ReplicatedStateMachine()
+    engine = RaftReplicationEngine(
+        node_id="leader_node",
+        log=log,
+        state_machine=sm,
+        get_active_peers_fn=lambda: [("127.0.0.1", 9001), ("127.0.0.1", 9002)],
+        get_term_and_role_fn=lambda: (1, "LEADER"),
+    )
+
+    # Leader appends 2 entries
+    e1 = log.append_command(term=1, command_type=RaftCommandType.SET, key="k1", value="v1")
+    e2 = log.append_command(term=1, command_type=RaftCommandType.SET, key="k2", value="v2")
+
+    # Cluster has 3 nodes total (leader + 2 peers) -> Quorum required is 2
+    assert log.commit_index == 0
+
+    # Peer 1 acknowledges up to index 2
+    resp1 = AppendEntriesResponse(term=1, follower_id="peer_1", success=True, match_index=2, last_log_index=2)
+    msg1 = Message(
+        type=MessageType.RAFT_APPEND_ENTRIES_RESPONSE,
+        sender_id="peer_1",
+        sender_udp_port=9001,
+        payload=resp1.to_dict(),
+    )
+    engine.handle_append_entries_response(msg1)
+
+    # Leader + Peer 1 = 2 nodes >= quorum -> commit index advances to 2!
+    assert log.commit_index == 2
+    assert log.last_applied == 2
+    assert sm.get("k1") == "v1"
+    assert sm.get("k2") == "v2"
+
+
+@pytest.mark.asyncio
+async def test_single_node_proposal_fast_path():
+    log = RaftLog()
+    sm = ReplicatedStateMachine()
+    engine = RaftReplicationEngine(
+        node_id="solo_node",
+        log=log,
+        state_machine=sm,
+        get_active_peers_fn=lambda: [],
+        get_term_and_role_fn=lambda: (1, "LEADER"),
+    )
+
+    result = await engine.propose_command(
+        command_type=RaftCommandType.SET,
+        key="config_key",
+        value=42,
+    )
+    assert result == 42
+    assert sm.get("config_key") == 42
+    assert log.commit_index == 1
