@@ -241,3 +241,30 @@ class RaftLog:
         self._commit_index = max(self._commit_index, self._snapshot_last_index)
         self._last_applied = max(self._last_applied, self._snapshot_last_index)
         self._entries = [e for e in self._entries if e.index > self._snapshot_last_index]
+
+
+
+class ReplicatedStateMachine:
+    """
+    Deterministic replicated state machine supporting atomic KV operations,
+    Compare-And-Swap (CAS), monotonic fencing distributed locks, and batch transactions.
+    """
+
+    def __init__(self) -> None:
+        self._state: Dict[str, Any] = {}
+        self._locks: Dict[str, DistributedLock] = {}
+        self._fencing_token_counter: int = 0
+        self._commands_applied: int = 0
+
+    @property
+    def commands_applied(self) -> int:
+        return self._commands_applied
+
+    @property
+    def key_count(self) -> int:
+        return len(self._state)
+
+    @property
+    def active_lock_count(self) -> int:
+        now = time.time()
+        return sum(1 for l in self._locks.values() if not l.is_expired(now))
