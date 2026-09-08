@@ -205,3 +205,39 @@ class RaftLog:
         """Update last_applied index to acknowledge state machine execution."""
         if index > self._last_applied:
             self._last_applied = min(index, self._commit_index)
+
+    def create_snapshot(self) -> Dict[str, Any]:
+        """Create snapshot metadata of current log compaction state."""
+        return {
+            "snapshot_last_index": self._snapshot_last_index,
+            "snapshot_last_term": self._snapshot_last_term,
+            "commit_index": self._commit_index,
+            "last_applied": self._last_applied,
+        }
+
+    def compact_log_before(self, index: int) -> int:
+        """
+        Trim log entries before index (which must be <= last_applied).
+        Replaces trimmed portion with snapshot markers to bound memory usage.
+        """
+        if index <= self._snapshot_last_index:
+            return 0
+        target = min(index, self._last_applied)
+        entry = self.get_entry(target)
+        if entry is None:
+            return 0
+
+        self._snapshot_last_index = entry.index
+        self._snapshot_last_term = entry.term
+        offset = target - (self._snapshot_last_index - len(self._entries))
+        trimmed_count = target - self._snapshot_last_index
+        self._entries = [e for e in self._entries if e.index > target]
+        return len(self._entries)
+
+    def restore_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        """Restore compaction markers from snapshot."""
+        self._snapshot_last_index = int(snapshot.get("snapshot_last_index", 0))
+        self._snapshot_last_term = int(snapshot.get("snapshot_last_term", 0))
+        self._commit_index = max(self._commit_index, self._snapshot_last_index)
+        self._last_applied = max(self._last_applied, self._snapshot_last_index)
+        self._entries = [e for e in self._entries if e.index > self._snapshot_last_index]
