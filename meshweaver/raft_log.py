@@ -1,3 +1,4 @@
+import asyncio
 """
 MeshWeaver Replicated State Machine & Raft Log Replication Engine
 Implements in-memory append-only Raft commit log, log matching invariants,
@@ -708,3 +709,51 @@ class RaftReplicationEngine:
                     fut.set_result(res)
 
         return results
+
+    async def propose_command(
+        self,
+        command_type: RaftCommandType,
+        key: Optional[str] = None,
+        value: Optional[Any] = None,
+        client_id: Optional[str] = None,
+        fencing_token: Optional[int] = None,
+        extra_data: Optional[Dict[str, Any]] = None,
+        timeout: float = 5.0,
+    ) -> Any:
+        """
+        Submit a new state command through the Raft replication engine:
+        Appends to leader log -> dispatches AppendEntries -> waits for quorum commit -> returns result.
+        """
+        term, role = self.get_term_and_role()
+        if role != "LEADER":
+            raise RuntimeError(f"Cannot propose command on non-leader node (current role: {role})")
+
+        self.total_proposals += 1
+        entry = self.log.append_command(
+            term=term,
+            command_type=command_type,
+            key=key,
+            value=value,
+            client_id=client_id or self.node_id,
+            fencing_token=fencing_token,
+            extra_data=extra_data or {},
+        )
+
+        active_peers = self.get_active_peers()
+        # Single node cluster fast-path
+        if not active_peers:
+            self.log.advance_commit_index(entry.index)
+            results = self.apply_committed_entries()
+            return results[-1][1] if results else None
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        self._pending_proposals[entry.index] = future
+
+        self.broadcast_append_entries()
+
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            self._pending_proposals.pop(entry.index, None)
+            raise TimeoutError(f"Proposal for index {entry.index} timed out waiting for consensus quorum after {timeout}s")
