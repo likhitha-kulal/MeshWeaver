@@ -1,7 +1,7 @@
 """
 MeshWeaver Networking Protocol
 Asyncio DatagramProtocol for UDP node discovery, DHT routing, gossip heartbeats,
-and TCP framing for task transport.
+Raft log replication RPCs, and TCP framing for task transport.
 """
 
 import asyncio
@@ -20,7 +20,8 @@ logger = logging.getLogger("meshweaver.networking")
 
 class UDPNodeProtocol(asyncio.DatagramProtocol):
     """
-    Non-blocking UDP protocol for discovery, routing table updates, and RPC transactions.
+    Non-blocking UDP protocol for discovery, routing table updates, gossip,
+    consensus leader election, and Raft log replication transactions.
     """
 
     def __init__(
@@ -32,6 +33,8 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         consensus_vote_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
         consensus_heartbeat_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
         consensus_response_handler: Optional[Callable[[Message], None]] = None,
+        raft_append_entries_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
+        raft_response_handler: Optional[Callable[[Message], None]] = None,
     ):
         self.node_id = node_id
         self.tcp_port = tcp_port
@@ -40,6 +43,8 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         self.consensus_vote_handler = consensus_vote_handler
         self.consensus_heartbeat_handler = consensus_heartbeat_handler
         self.consensus_response_handler = consensus_response_handler
+        self.raft_append_entries_handler = raft_append_entries_handler
+        self.raft_response_handler = raft_response_handler
         self.transport: Optional[asyncio.DatagramTransport] = None
         self._pending_requests: Dict[str, asyncio.Future[Message]] = {}
         self.local_udp_port: int = 0
@@ -93,6 +98,18 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
             elif msg.type in (MessageType.ELECTION_VOTE_RESPONSE, MessageType.LEADER_HEARTBEAT_ACK):
                 if self.consensus_response_handler is not None:
                     self.consensus_response_handler(msg)
+                if msg.msg_id in self._pending_requests:
+                    fut = self._pending_requests.pop(msg.msg_id)
+                    if not fut.done():
+                        fut.set_result(msg)
+            elif msg.type == MessageType.RAFT_APPEND_ENTRIES_REQUEST:
+                if self.raft_append_entries_handler is not None:
+                    resp = self.raft_append_entries_handler(msg, addr)
+                    if resp is not None:
+                        self.send_datagram(resp, addr[0], addr[1])
+            elif msg.type == MessageType.RAFT_APPEND_ENTRIES_RESPONSE:
+                if self.raft_response_handler is not None:
+                    self.raft_response_handler(msg)
                 if msg.msg_id in self._pending_requests:
                     fut = self._pending_requests.pop(msg.msg_id)
                     if not fut.done():
