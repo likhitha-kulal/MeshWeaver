@@ -320,7 +320,89 @@ class ReplicatedStateMachine:
             self._state[entry.key] = new_val
             return new_val
 
+        elif cmd == RaftCommandType.LOCK_ACQUIRE:
+            return self._apply_lock_acquire(entry)
+
+        elif cmd == RaftCommandType.LOCK_RELEASE:
+            return self._apply_lock_release(entry)
+
         elif cmd == RaftCommandType.NOOP:
             return "NOOP_APPLIED"
 
         return None
+
+    def _apply_lock_acquire(self, entry: LogEntry) -> LockAcquireResult:
+        """Process distributed lock acquisition with TTL and monotonic fencing token."""
+        resource = entry.key or "default_resource"
+        holder_id = entry.client_id or "anonymous"
+        ttl_seconds = float(entry.extra_data.get("ttl_seconds", 30.0))
+        now = entry.timestamp or time.time()
+
+        existing = self._locks.get(resource)
+        if existing is not None and not existing.is_expired(now):
+            if existing.holder_id == holder_id:
+                # Renew existing lock
+                existing.acquired_at = now
+                existing.ttl_seconds = ttl_seconds
+                return LockAcquireResult(
+                    acquired=True,
+                    resource=resource,
+                    fencing_token=existing.fencing_token,
+                    holder_id=holder_id,
+                )
+            return LockAcquireResult(
+                acquired=False,
+                resource=resource,
+                fencing_token=None,
+                holder_id=existing.holder_id,
+                error=f"Resource '{resource}' currently locked by {existing.holder_id}",
+            )
+
+        self._fencing_token_counter += 1
+        new_lock = DistributedLock(
+            resource=resource,
+            holder_id=holder_id,
+            fencing_token=self._fencing_token_counter,
+            acquired_at=now,
+            ttl_seconds=ttl_seconds,
+        )
+        self._locks[resource] = new_lock
+        return LockAcquireResult(
+            acquired=True,
+            resource=resource,
+            fencing_token=new_lock.fencing_token,
+            holder_id=holder_id,
+        )
+
+    def _apply_lock_release(self, entry: LogEntry) -> bool:
+        """Release distributed lock verifying holder and fencing token."""
+        resource = entry.key or "default_resource"
+        holder_id = entry.client_id
+        fencing_token = entry.fencing_token or entry.extra_data.get("fencing_token")
+
+        existing = self._locks.get(resource)
+        if existing is None:
+            return True
+
+        if fencing_token is not None and existing.fencing_token != fencing_token:
+            return False
+        if holder_id is not None and existing.holder_id != holder_id:
+            return False
+
+        self._locks.pop(resource, None)
+        return True
+
+    def get_lock(self, resource: str) -> Optional[DistributedLock]:
+        """Retrieve active lock info for resource if not expired."""
+        lock = self._locks.get(resource)
+        if lock is not None and not lock.is_expired():
+            return lock
+        return None
+
+    def cleanup_expired_locks(self) -> int:
+        """Evict expired distributed locks."""
+        now = time.time()
+        expired = [r for r, l in self._locks.items() if l.is_expired(now)]
+        for r in expired:
+            self._locks.pop(r, None)
+        return len(expired)
