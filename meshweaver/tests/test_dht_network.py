@@ -110,8 +110,8 @@ class TestDHTNetworking(unittest.IsolatedAsyncioTestCase):
     """Integration test suite for FIND_NODE RPC and Bootstrapping."""
 
     async def test_find_node_rpc(self):
-        node_a = MeshNode(host="127.0.0.1", udp_port=19200)
-        node_b = MeshNode(host="127.0.0.1", udp_port=19202)
+        node_a = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        node_b = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
 
         # Add some known contacts to Node B's routing table
         sample_peer1 = NodeInfo(NodeID(), "127.0.0.1", 19204)
@@ -146,9 +146,9 @@ class TestDHTNetworking(unittest.IsolatedAsyncioTestCase):
 
     async def test_bootstrap_sequence(self):
         # Cluster: Bootstrap Node (A), Existing Node (B), Joining Node (C)
-        node_a = MeshNode(host="127.0.0.1", udp_port=19300)
-        node_b = MeshNode(host="127.0.0.1", udp_port=19302)
-        node_c = MeshNode(host="127.0.0.1", udp_port=19304)
+        node_a = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        node_b = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        node_c = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
 
         await node_a.start()
         await node_b.start()

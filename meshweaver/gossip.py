@@ -204,34 +204,28 @@ def compute_load_score(snapshot: PeerLoadSnapshot) -> float:
     """Compute normalized composite load index (0.0 to 1.0)."""
     return (snapshot.cpu_percent * 0.6 + snapshot.ram_percent * 0.4) / 100.0
 
-# Enhanced GossipManager type annotations and telemetry parameters
-
-# Neighbor registration deduplication and active link validation
-
-# Peer load retrieval and contact resolution helpers
-
-# Strict TTL expiration threshold verification
-
 def pack_heartbeat_payload(node_id: str, host: str, udp_port: int, cpu: float, ram: float, tcp_port: int = 0) -> dict:
     """Serialize node health and telemetry into standardized gossip payload."""
-    return {"type": "GOSSIP_HEARTBEAT", "node_id": node_id, "host": host, "udp_port": udp_port, "tcp_port": tcp_port, "cpu": cpu, "ram": ram, "timestamp": time.time()}
+    return {
+        "type": "GOSSIP_HEARTBEAT",
+        "node_id": node_id,
+        "host": host,
+        "udp_port": udp_port,
+        "tcp_port": tcp_port,
+        "cpu": cpu,
+        "ram": ram,
+        "timestamp": time.time(),
+    }
+
 
 def unpack_heartbeat_payload(payload: dict) -> dict:
     """Validate and parse received gossip heartbeat dictionary."""
-    return {"node_id": payload.get("node_id", ""), "host": payload.get("host", "127.0.0.1"), "udp_port": int(payload.get("udp_port", 0)), "tcp_port": int(payload.get("tcp_port", 0)), "cpu": float(payload.get("cpu", 0.0)), "ram": float(payload.get("ram", 0.0)), "timestamp": float(payload.get("timestamp", time.time()))}
-
-# Heartbeat broadcast loop lifecycle monitor
-
-# Jitter calculation helper for gossip broadcast dispersion
-
-# Automatic peer record refresh on heartbeat arrival
-
-# Node liveness deadline checking and dead node marking
-
-# Event hooks for node eviction notification
-
-# Background task for removing expired nodes from memory table
-
-# Helper methods for cluster size queries
-
-# Thread safety primitives and locked updates
+    return {
+        "node_id": payload.get("node_id", ""),
+        "host": payload.get("host", "127.0.0.1"),
+        "udp_port": int(payload.get("udp_port", 0)),
+        "tcp_port": int(payload.get("tcp_port", 0)),
+        "cpu": float(payload.get("cpu", 0.0)),
+        "ram": float(payload.get("ram", 0.0)),
+        "timestamp": float(payload.get("timestamp", time.time())),
+    }
