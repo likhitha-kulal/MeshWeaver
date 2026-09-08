@@ -132,3 +132,49 @@ class RaftLog:
         if entry is None:
             return False
         return entry.term == prev_log_term
+
+    def truncate_from(self, from_index: int) -> int:
+        """
+        Truncate all log entries starting from from_index (inclusive).
+        Used during conflict resolution when follower diverges from leader.
+        """
+        if from_index <= self._snapshot_last_index:
+            raise ValueError(f"Cannot truncate compacted snapshot log below {self._snapshot_last_index}")
+        if from_index > self.last_index:
+            return 0
+
+        offset = from_index - self._snapshot_last_index - 1
+        removed_count = len(self._entries) - offset
+        self._entries = self._entries[:offset]
+        if self._commit_index > self.last_index:
+            self._commit_index = self.last_index
+        return removed_count
+
+    def reconcile_follower_entries(
+        self,
+        prev_log_index: int,
+        prev_log_term: int,
+        new_entries: List[LogEntry],
+    ) -> Tuple[bool, int]:
+        """
+        Implements Raft AppendEntries log consistency and conflict resolution:
+        1. Reply False if log doesn't contain an entry at prev_log_index matching prev_log_term.
+        2. If an existing entry conflicts with a new one (same index but different terms),
+           delete existing entry and all that follow it.
+        3. Append any new entries not already in the log.
+        Returns: (success: bool, match_index: int)
+        """
+        if not self.check_consistency(prev_log_index, prev_log_term):
+            return False, self.last_index
+
+        for entry in new_entries:
+            existing = self.get_entry(entry.index)
+            if existing is not None:
+                if existing.term != entry.term:
+                    # Conflict found -> truncate conflicting entries
+                    self.truncate_from(entry.index)
+                    self.append_entry(entry)
+            else:
+                self.append_entry(entry)
+
+        return True, self.last_index
