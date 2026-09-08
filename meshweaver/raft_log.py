@@ -438,3 +438,83 @@ class ReplicatedStateMachine:
         self._locks = {}
         for k, v in snapshot_data.get("locks", {}).items():
             self._locks[k] = DistributedLock.from_dict(v)
+
+
+
+@dataclass
+class FollowerProgress:
+    """Tracks replication progress and next log indices for a follower peer."""
+    node_id: str
+    match_index: int = 0
+    next_index: int = 1
+    last_ack_time: float = field(default_factory=time.time)
+
+
+@dataclass
+class RaftMetrics:
+    """Real-time observability snapshot for Raft log replication and state machine."""
+    node_id: str
+    role: str
+    current_term: int
+    last_log_index: int
+    last_log_term: int
+    commit_index: int
+    last_applied: int
+    total_proposals: int
+    total_committed: int
+    total_replications_sent: int
+    replication_successes: int
+    replication_failures: int
+    active_locks_count: int
+    state_keys_count: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "role": self.role,
+            "current_term": self.current_term,
+            "last_log_index": self.last_log_index,
+            "last_log_term": self.last_log_term,
+            "commit_index": self.commit_index,
+            "last_applied": self.last_applied,
+            "total_proposals": self.total_proposals,
+            "total_committed": self.total_committed,
+            "total_replications_sent": self.total_replications_sent,
+            "replication_successes": self.replication_successes,
+            "replication_failures": self.replication_failures,
+            "active_locks_count": self.active_locks_count,
+            "state_keys_count": self.state_keys_count,
+        }
+
+
+class RaftReplicationEngine:
+    """
+    Raft Log Replication Engine managing proposal submission, AppendEntries RPCs,
+    follower catch-up, majority quorum commit consensus, and state machine application.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        log: Optional[RaftLog] = None,
+        state_machine: Optional[ReplicatedStateMachine] = None,
+        get_active_peers_fn: Optional[Callable[[], List[Tuple[str, int]]]] = None,
+        send_message_fn: Optional[Callable[[str, int, Message], None]] = None,
+        get_term_and_role_fn: Optional[Callable[[], Tuple[int, str]]] = None,
+    ):
+        self.node_id = node_id
+        self.log = log or RaftLog()
+        self.state_machine = state_machine or ReplicatedStateMachine()
+        self.get_active_peers = get_active_peers_fn or (lambda: [])
+        self.send_message = send_message_fn or (lambda host, port, msg: None)
+        self.get_term_and_role = get_term_and_role_fn or (lambda: (1, "LEADER"))
+
+        self.followers: Dict[str, FollowerProgress] = {}
+        self._pending_proposals: Dict[int, Any] = {}  # index -> asyncio.Future
+
+        # Metrics
+        self.total_proposals = 0
+        self.total_committed = 0
+        self.total_replications_sent = 0
+        self.replication_successes = 0
+        self.replication_failures = 0
