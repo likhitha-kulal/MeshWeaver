@@ -2,6 +2,7 @@
 Unit tests for Raft replication engine, AppendEntries processing, and quorum commits.
 """
 
+import asyncio
 import pytest
 from meshweaver.models import (
     AppendEntriesRequest,
@@ -119,28 +120,6 @@ def test_leader_quorum_commit_advancement():
     assert sm.get("k2") == "v2"
 
 
-@pytest.mark.asyncio
-async def test_single_node_proposal_fast_path():
-    log = RaftLog()
-    sm = ReplicatedStateMachine()
-    engine = RaftReplicationEngine(
-        node_id="solo_node",
-        log=log,
-        state_machine=sm,
-        get_active_peers_fn=lambda: [],
-        get_term_and_role_fn=lambda: (1, "LEADER"),
-    )
-
-    result = await engine.propose_command(
-        command_type=RaftCommandType.SET,
-        key="config_key",
-        value=42,
-    )
-    assert result == 42
-    assert sm.get("config_key") == 42
-    assert log.commit_index == 1
-
-
 def test_follower_conflict_recovery_and_catchup():
     log = RaftLog()
     sm = ReplicatedStateMachine()
@@ -183,3 +162,27 @@ def test_follower_conflict_recovery_and_catchup():
     assert log.get_entry(3).value == "new_entry"
     assert sm.get("y") == "canonical"
     assert sm.get("z") == "new_entry"
+
+
+def test_single_node_proposal_fast_path():
+    async def _run():
+        log = RaftLog()
+        sm = ReplicatedStateMachine()
+        engine = RaftReplicationEngine(
+            node_id="solo_node",
+            log=log,
+            state_machine=sm,
+            get_active_peers_fn=lambda: [],
+            get_term_and_role_fn=lambda: (1, "LEADER"),
+        )
+
+        result = await engine.propose_command(
+            command_type=RaftCommandType.SET,
+            key="config_key",
+            value=42,
+        )
+        assert result == 42
+        assert sm.get("config_key") == 42
+        assert log.commit_index == 1
+
+    asyncio.run(_run())

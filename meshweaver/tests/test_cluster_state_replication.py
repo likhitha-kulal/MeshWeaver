@@ -1,64 +1,80 @@
 """
-Cluster integration test for multi-node state replication, atomic CAS, and distributed locking.
+Integration tests for multi-node MeshWeaver cluster state replication and distributed locking.
 """
 
 import asyncio
-import pytest
+import unittest
+
 from meshweaver.models import RaftCommandType
 from meshweaver.node import MeshNode
 
 
-@pytest.mark.asyncio
-async def test_cluster_state_replication_and_distributed_lock():
-    # Spin up 3-node cluster
-    n1 = MeshNode(host="127.0.0.1", port=0, enable_consensus=False)
-    await n1.start()
+class TestClusterStateReplicationIntegration(unittest.IsolatedAsyncioTestCase):
+    async def test_cluster_state_replication_and_distributed_lock(self):
+        # Spin up 3-node cluster on isolated test ports
+        n1 = MeshNode(host="127.0.0.1", udp_port=19600, tcp_port=19601)
+        n2 = MeshNode(host="127.0.0.1", udp_port=19610, tcp_port=19611)
+        n3 = MeshNode(host="127.0.0.1", udp_port=19620, tcp_port=19621)
 
-    n2 = MeshNode(host="127.0.0.1", port=0, bootstrap_nodes=[("127.0.0.1", n1.port)], enable_consensus=False)
-    await n2.start()
+        nodes = [n1, n2, n3]
+        for n in nodes:
+            await n.start()
+            n.leader_election.config.min_election_timeout = 0.150
+            n.leader_election.config.max_election_timeout = 0.300
+            n.leader_election.config.heartbeat_interval = 0.040
 
-    n3 = MeshNode(host="127.0.0.1", port=0, bootstrap_nodes=[("127.0.0.1", n1.port)], enable_consensus=False)
-    await n3.start()
+        try:
+            # Bootstrap cluster
+            await n2.bootstrap([("127.0.0.1", 19600)])
+            await n3.bootstrap([("127.0.0.1", 19600)])
+            await n1.bootstrap([("127.0.0.1", 19610)])
+            await asyncio.sleep(0.15)
 
-    # Let nodes discover each other
-    await asyncio.sleep(0.3)
+            # Elect n1 as leader
+            await n1.trigger_election()
+            await asyncio.sleep(0.4)
 
-    try:
-        # Leader (n1) sets key
-        val = await n1.state_set("cluster_name", "HyperMesh-1")
-        assert val == "HyperMesh-1"
-        assert n1.state_get("cluster_name") == "HyperMesh-1"
+            # Leader (n1) sets key
+            val = await n1.state_set("cluster_name", "HyperMesh-1")
+            self.assertEqual(val, "HyperMesh-1")
+            self.assertEqual(n1.state_get("cluster_name"), "HyperMesh-1")
 
-        # Increment shared counter
-        c1 = await n1.state_increment("task_counter", delta=10)
-        assert c1 == 10
-        assert n1.state_get("task_counter") == 10
+            # Increment shared counter
+            c1 = await n1.state_increment("task_counter", delta=10)
+            self.assertEqual(c1, 10)
+            self.assertEqual(n1.state_get("task_counter"), 10)
 
-        # Atomic Compare-And-Swap (CAS)
-        cas_ok = await n1.state_cas("cluster_name", expected="HyperMesh-1", new_value="HyperMesh-Alpha")
-        assert cas_ok is True
-        assert n1.state_get("cluster_name") == "HyperMesh-Alpha"
+            # Atomic Compare-And-Swap (CAS)
+            cas_ok = await n1.state_cas("cluster_name", expected="HyperMesh-1", new_value="HyperMesh-Alpha")
+            self.assertTrue(cas_ok)
+            self.assertEqual(n1.state_get("cluster_name"), "HyperMesh-Alpha")
 
-        # Distributed Lock Acquisition
-        lock_res1 = await n1.acquire_lock("db_write_mutex", ttl_seconds=10.0)
-        assert lock_res1.acquired is True
-        assert lock_res1.fencing_token == 1
+            # Distributed Lock Acquisition
+            lock_res1 = await n1.acquire_lock("db_write_mutex", ttl_seconds=10.0)
+            self.assertTrue(lock_res1.acquired)
+            self.assertEqual(lock_res1.fencing_token, 1)
 
-        # Release Lock
-        rel_ok = await n1.release_lock("db_write_mutex", fencing_token=1)
-        assert rel_ok is True
+            # Release Lock
+            rel_ok = await n1.release_lock("db_write_mutex", fencing_token=1)
+            self.assertTrue(rel_ok)
 
-        # Re-acquire lock -> receives monotonic incremented fencing token
-        lock_res2 = await n1.acquire_lock("db_write_mutex", ttl_seconds=10.0)
-        assert lock_res2.acquired is True
-        assert lock_res2.fencing_token == 2
+            # Re-acquire lock -> receives monotonic incremented fencing token
+            lock_res2 = await n1.acquire_lock("db_write_mutex", ttl_seconds=10.0)
+            self.assertTrue(lock_res2.acquired)
+            self.assertEqual(lock_res2.fencing_token, 2)
 
-        # Verify metrics
-        metrics = n1.get_raft_metrics()
-        assert metrics.total_proposals >= 5
-        assert metrics.state_keys_count >= 2
+            # Verify metrics
+            metrics = n1.get_raft_metrics()
+            self.assertTrue(metrics.total_proposals >= 5)
+            self.assertTrue(metrics.state_keys_count >= 2)
 
-    finally:
-        await n1.stop()
-        await n2.stop()
-        await n3.stop()
+        finally:
+            for n in nodes:
+                try:
+                    await n.stop()
+                except Exception:
+                    pass
+
+
+if __name__ == "__main__":
+    unittest.main()

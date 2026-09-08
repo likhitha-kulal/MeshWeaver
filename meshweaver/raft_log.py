@@ -538,12 +538,11 @@ class RaftReplicationEngine:
         active_peers = self.get_active_peers()
         for host, port in active_peers:
             peer_id = f"{host}:{port}"
-            self.initialize_follower(peer_id)
-            follower = self.followers[peer_id]
-
-            prev_idx = follower.next_index - 1
+            follower = self.followers.get(peer_id)
+            next_idx = follower.next_index if follower else 1
+            prev_idx = next_idx - 1
             prev_term = self.log.get_term(prev_idx)
-            entries_to_send = self.log.slice_from(follower.next_index)
+            entries_to_send = self.log.slice_from(next_idx)
 
             req = AppendEntriesRequest(
                 term=term,
@@ -681,7 +680,7 @@ class RaftReplicationEngine:
             logger.warning(f"Malformed AppendEntriesResponse: {e}")
             return
 
-        follower_id = msg.sender_id
+        follower_id = resp.follower_id or msg.sender_id
         self.synchronize_follower_progress(
             follower_id=follower_id,
             success=resp.success,
