@@ -326,6 +326,9 @@ class ReplicatedStateMachine:
         elif cmd == RaftCommandType.LOCK_RELEASE:
             return self._apply_lock_release(entry)
 
+        elif cmd == RaftCommandType.BATCH:
+            return self._apply_batch(entry)
+
         elif cmd == RaftCommandType.NOOP:
             return "NOOP_APPLIED"
 
@@ -406,3 +409,32 @@ class ReplicatedStateMachine:
         for r in expired:
             self._locks.pop(r, None)
         return len(expired)
+
+    def _apply_batch(self, entry: LogEntry) -> List[Any]:
+        """Atomically execute a batch of sub-commands."""
+        raw_ops = entry.extra_data.get("operations", [])
+        results: List[Any] = []
+        for op in raw_ops:
+            sub_entry = LogEntry.from_dict(op) if isinstance(op, dict) else op
+            res = self.apply_command(sub_entry)
+            results.append(res)
+        return results
+
+    def export_state(self) -> Dict[str, Any]:
+        """Export full snapshot representation of KV state and active locks."""
+        now = time.time()
+        return {
+            "state": dict(self._state),
+            "locks": {k: v.to_dict() for k, v in self._locks.items() if not v.is_expired(now)},
+            "fencing_token_counter": self._fencing_token_counter,
+            "commands_applied": self._commands_applied,
+        }
+
+    def import_state(self, snapshot_data: Dict[str, Any]) -> None:
+        """Restore state machine from snapshot representation."""
+        self._state = dict(snapshot_data.get("state", {}))
+        self._fencing_token_counter = int(snapshot_data.get("fencing_token_counter", 0))
+        self._commands_applied = int(snapshot_data.get("commands_applied", 0))
+        self._locks = {}
+        for k, v in snapshot_data.get("locks", {}).items():
+            self._locks[k] = DistributedLock.from_dict(v)
