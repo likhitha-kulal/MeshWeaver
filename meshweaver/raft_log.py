@@ -690,3 +690,21 @@ class RaftReplicationEngine:
 
         if resp.success:
             self.check_and_advance_quorum_commit()
+
+    def apply_committed_entries(self) -> List[Tuple[int, Any]]:
+        """Apply all newly committed entries to the state machine in strict sequential order."""
+        unapplied = self.log.get_unapplied_entries()
+        results: List[Tuple[int, Any]] = []
+
+        for entry in unapplied:
+            res = self.state_machine.apply_command(entry)
+            self.log.mark_applied(entry.index)
+            results.append((entry.index, res))
+
+            # Resolve pending client proposal future if registered
+            if entry.index in self._pending_proposals:
+                fut = self._pending_proposals.pop(entry.index)
+                if not fut.done():
+                    fut.set_result(res)
+
+        return results
