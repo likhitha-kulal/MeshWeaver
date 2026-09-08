@@ -639,3 +639,54 @@ class RaftReplicationEngine:
             # Step down next_index on conflict to find common ancestor
             follower.next_index = max(1, min(follower.next_index - 1, last_index + 1))
             self.replication_failures += 1
+
+    def check_and_advance_quorum_commit(self) -> int:
+        """
+        Check if there exists an N > commit_index such that a majority of
+        match_index[i] >= N and log[N].term == current_term.
+        Advances commit_index if quorum is satisfied.
+        """
+        term, role = self.get_term_and_role()
+        if role != "LEADER":
+            return self.log.commit_index
+
+        active_peers = self.get_active_peers()
+        total_cluster = len(active_peers) + 1
+        quorum_required = (total_cluster // 2) + 1
+
+        # Collect match indices including leader's own last_index
+        match_indices = [self.log.last_index]
+        for follower in self.followers.values():
+            match_indices.append(follower.match_index)
+
+        match_indices.sort(reverse=True)
+
+        for candidate_idx in range(self.log.last_index, self.log.commit_index, -1):
+            if self.log.get_term(candidate_idx) == term:
+                count = sum(1 for m in match_indices if m >= candidate_idx)
+                if count >= quorum_required:
+                    self.log.advance_commit_index(candidate_idx)
+                    self.total_committed += 1
+                    self.apply_committed_entries()
+                    break
+
+        return self.log.commit_index
+
+    def handle_append_entries_response(self, msg: Message) -> None:
+        """Process follower AppendEntriesResponse on leader."""
+        try:
+            resp = AppendEntriesResponse.from_dict(msg.payload)
+        except Exception as e:
+            logger.warning(f"Malformed AppendEntriesResponse: {e}")
+            return
+
+        follower_id = msg.sender_id
+        self.synchronize_follower_progress(
+            follower_id=follower_id,
+            success=resp.success,
+            match_index=resp.match_index,
+            last_index=resp.last_log_index,
+        )
+
+        if resp.success:
+            self.check_and_advance_quorum_commit()
