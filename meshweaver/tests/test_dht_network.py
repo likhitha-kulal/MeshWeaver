@@ -106,7 +106,7 @@ class TestRoutingTable(unittest.TestCase):
         self.assertEqual(distances, sorted(distances))
 
 
-class TestWeek2Networking(unittest.IsolatedAsyncioTestCase):
+class TestDHTNetworking(unittest.IsolatedAsyncioTestCase):
     """Integration test suite for FIND_NODE RPC and Bootstrapping."""
 
     async def test_find_node_rpc(self):
