@@ -228,6 +228,42 @@ class AppendEntriesRequest:
         )
 
 
+
+
+@dataclass
+class AppendEntriesResponse:
+    """
+    Raft RPC response returned by follower acknowledging or rejecting log append.
+    """
+    term: int
+    follower_id: str
+    success: bool
+    match_index: int = 0
+    last_log_index: int = 0
+    error_message: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "follower_id": self.follower_id,
+            "success": self.success,
+            "match_index": self.match_index,
+            "last_log_index": self.last_log_index,
+            "error_message": self.error_message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AppendEntriesResponse":
+        return cls(
+            term=int(data["term"]),
+            follower_id=data["follower_id"],
+            success=bool(data["success"]),
+            match_index=int(data.get("match_index", 0)),
+            last_log_index=int(data.get("last_log_index", 0)),
+            error_message=data.get("error_message"),
+        )
+
+
 class MessageType(str, Enum):
     """RPC and network control message types."""
     PING = "PING"
