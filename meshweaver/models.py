@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 import uuid
 
 
@@ -124,6 +124,18 @@ class ElectionRole(str, Enum):
     CANDIDATE = "CANDIDATE"
     LEADER = "LEADER"
 
+
+class RaftCommandType(str, Enum):
+    """Command types executed on the replicated state machine."""
+    SET = "SET"
+    GET = "GET"
+    DELETE = "DELETE"
+    CAS = "CAS"
+    INCREMENT = "INCREMENT"
+    LOCK_ACQUIRE = "LOCK_ACQUIRE"
+    LOCK_RELEASE = "LOCK_RELEASE"
+    BATCH = "BATCH"
+    NOOP = "NOOP"
 
 class MessageType(str, Enum):
     """RPC and network control message types."""
