@@ -518,3 +518,48 @@ class RaftReplicationEngine:
         self.total_replications_sent = 0
         self.replication_successes = 0
         self.replication_failures = 0
+
+    def initialize_follower(self, follower_id: str) -> None:
+        """Initialize progress tracking for a new or re-connected follower."""
+        if follower_id not in self.followers:
+            self.followers[follower_id] = FollowerProgress(
+                node_id=follower_id,
+                match_index=0,
+                next_index=self.log.last_index + 1,
+            )
+
+    def broadcast_append_entries(self) -> None:
+        """Dispatch AppendEntries RPC requests to all active cluster peers."""
+        term, role = self.get_term_and_role()
+        if role != "LEADER":
+            return
+
+        active_peers = self.get_active_peers()
+        for host, port in active_peers:
+            peer_id = f"{host}:{port}"
+            self.initialize_follower(peer_id)
+            follower = self.followers[peer_id]
+
+            prev_idx = follower.next_index - 1
+            prev_term = self.log.get_term(prev_idx)
+            entries_to_send = self.log.slice_from(follower.next_index)
+
+            req = AppendEntriesRequest(
+                term=term,
+                leader_id=self.node_id,
+                prev_log_index=prev_idx,
+                prev_log_term=prev_term,
+                entries=entries_to_send,
+                leader_commit=self.log.commit_index,
+            )
+            msg = Message(
+                type=MessageType.RAFT_APPEND_ENTRIES_REQUEST,
+                sender_id=self.node_id,
+                sender_udp_port=0,
+                payload=req.to_dict(),
+            )
+            try:
+                self.send_message(host, port, msg)
+                self.total_replications_sent += 1
+            except Exception as e:
+                logger.debug(f"Failed to send AppendEntries to {host}:{port}: {e}")
