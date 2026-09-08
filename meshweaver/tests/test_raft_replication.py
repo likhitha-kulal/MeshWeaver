@@ -139,3 +139,47 @@ async def test_single_node_proposal_fast_path():
     assert result == 42
     assert sm.get("config_key") == 42
     assert log.commit_index == 1
+
+
+def test_follower_conflict_recovery_and_catchup():
+    log = RaftLog()
+    sm = ReplicatedStateMachine()
+    engine = RaftReplicationEngine(
+        node_id="follower_lagged",
+        log=log,
+        state_machine=sm,
+        get_term_and_role_fn=lambda: (2, "FOLLOWER"),
+    )
+
+    # Follower has uncommitted diverging entry at index 2 (term 1)
+    log.append_command(term=1, command_type=RaftCommandType.SET, key="x", value="old")
+    log.append_command(term=1, command_type=RaftCommandType.SET, key="y", value="diverged")
+
+    # Leader sends replacement entry at index 2 with term 2
+    req = AppendEntriesRequest(
+        term=2,
+        leader_id="new_leader",
+        prev_log_index=1,
+        prev_log_term=1,
+        entries=[
+            LogEntry(index=2, term=2, command_type=RaftCommandType.SET, key="y", value="canonical"),
+            LogEntry(index=3, term=2, command_type=RaftCommandType.SET, key="z", value="new_entry"),
+        ],
+        leader_commit=3,
+    )
+    msg = Message(
+        type=MessageType.RAFT_APPEND_ENTRIES_REQUEST,
+        sender_id="new_leader",
+        sender_udp_port=9000,
+        payload=req.to_dict(),
+    )
+
+    resp_msg = engine.handle_append_entries_request(msg, ("127.0.0.1", 9000))
+    resp = AppendEntriesResponse.from_dict(resp_msg.payload)
+
+    assert resp.success is True
+    assert log.last_index == 3
+    assert log.get_entry(2).value == "canonical"
+    assert log.get_entry(3).value == "new_entry"
+    assert sm.get("y") == "canonical"
+    assert sm.get("z") == "new_entry"
