@@ -178,3 +178,30 @@ class RaftLog:
                 self.append_entry(entry)
 
         return True, self.last_index
+
+    def advance_commit_index(self, new_commit_index: int) -> int:
+        """
+        Safely advance the commit index up to min(new_commit_index, last_index).
+        Cannot move backwards.
+        """
+        valid_commit = min(new_commit_index, self.last_index)
+        if valid_commit > self._commit_index:
+            self._commit_index = valid_commit
+        return self._commit_index
+
+    def get_unapplied_entries(self) -> List[LogEntry]:
+        """Return all committed entries that have not yet been applied to the state machine."""
+        if self._commit_index <= self._last_applied:
+            return []
+        start_idx = self._last_applied + 1
+        unapplied: List[LogEntry] = []
+        for idx in range(start_idx, self._commit_index + 1):
+            entry = self.get_entry(idx)
+            if entry is not None:
+                unapplied.append(entry)
+        return unapplied
+
+    def mark_applied(self, index: int) -> None:
+        """Update last_applied index to acknowledge state machine execution."""
+        if index > self._last_applied:
+            self._last_applied = min(index, self._commit_index)
