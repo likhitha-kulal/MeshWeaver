@@ -563,3 +563,64 @@ class RaftReplicationEngine:
                 self.total_replications_sent += 1
             except Exception as e:
                 logger.debug(f"Failed to send AppendEntries to {host}:{port}: {e}")
+
+    def handle_append_entries_request(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        """
+        Follower receiver implementation for Raft AppendEntries RPC:
+        Validates leader term, verifies log consistency, reconciles entries,
+        and advances local commit_index.
+        """
+        try:
+            req = AppendEntriesRequest.from_dict(msg.payload)
+        except Exception as e:
+            logger.warning(f"Malformed AppendEntriesRequest: {e}")
+            return None
+
+        current_term, _ = self.get_term_and_role()
+
+        # Rule 1: Reply False if term < current_term
+        if req.term < current_term:
+            resp = AppendEntriesResponse(
+                term=current_term,
+                follower_id=self.node_id,
+                success=False,
+                match_index=self.log.last_index,
+                last_log_index=self.log.last_index,
+                error_message="Stale leader term",
+            )
+            return Message(
+                msg_id=msg.msg_id,
+                type=MessageType.RAFT_APPEND_ENTRIES_RESPONSE,
+                sender_id=self.node_id,
+                sender_udp_port=0,
+                payload=resp.to_dict(),
+            )
+
+        # Rule 2: Reconcile entries against log matching invariant
+        success, match_idx = self.log.reconcile_follower_entries(
+            prev_log_index=req.prev_log_index,
+            prev_log_term=req.prev_log_term,
+            new_entries=req.entries,
+        )
+
+        if success:
+            # Rule 3: Advance follower commit index if leader_commit > commit_index
+            if req.leader_commit > self.log.commit_index:
+                new_commit = min(req.leader_commit, match_idx)
+                self.log.advance_commit_index(new_commit)
+                self.apply_committed_entries()
+
+        resp = AppendEntriesResponse(
+            term=max(current_term, req.term),
+            follower_id=self.node_id,
+            success=success,
+            match_index=match_idx if success else self.log.last_index,
+            last_log_index=self.log.last_index,
+        )
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.RAFT_APPEND_ENTRIES_RESPONSE,
+            sender_id=self.node_id,
+            sender_udp_port=0,
+            payload=resp.to_dict(),
+        )
