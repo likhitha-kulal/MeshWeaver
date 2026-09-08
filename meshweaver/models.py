@@ -264,6 +264,77 @@ class AppendEntriesResponse:
         )
 
 
+
+
+@dataclass
+class DistributedLock:
+    """
+    Distributed mutual exclusion lease with monotonic fencing tokens.
+    Guarantees safety against zombie leaders or slow network partitions.
+    """
+    resource: str
+    holder_id: str
+    fencing_token: int
+    acquired_at: float = field(default_factory=time.time)
+    ttl_seconds: float = 30.0
+
+    def is_expired(self, now: Optional[float] = None) -> bool:
+        current_ts = now if now is not None else time.time()
+        return current_ts > (self.acquired_at + self.ttl_seconds)
+
+    def remaining_ttl(self, now: Optional[float] = None) -> float:
+        current_ts = now if now is not None else time.time()
+        return max(0.0, (self.acquired_at + self.ttl_seconds) - current_ts)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "resource": self.resource,
+            "holder_id": self.holder_id,
+            "fencing_token": self.fencing_token,
+            "acquired_at": self.acquired_at,
+            "ttl_seconds": self.ttl_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DistributedLock":
+        return cls(
+            resource=data["resource"],
+            holder_id=data["holder_id"],
+            fencing_token=int(data["fencing_token"]),
+            acquired_at=float(data.get("acquired_at", time.time())),
+            ttl_seconds=float(data.get("ttl_seconds", 30.0)),
+        )
+
+
+@dataclass
+class LockAcquireResult:
+    """Result returned from an acquire_lock request."""
+    acquired: bool
+    resource: str
+    fencing_token: Optional[int] = None
+    holder_id: Optional[str] = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "acquired": self.acquired,
+            "resource": self.resource,
+            "fencing_token": self.fencing_token,
+            "holder_id": self.holder_id,
+            "error": self.error,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LockAcquireResult":
+        return cls(
+            acquired=bool(data["acquired"]),
+            resource=data["resource"],
+            fencing_token=int(data["fencing_token"]) if data.get("fencing_token") is not None else None,
+            holder_id=data.get("holder_id"),
+            error=data.get("error"),
+        )
+
+
 class MessageType(str, Enum):
     """RPC and network control message types."""
     PING = "PING"
