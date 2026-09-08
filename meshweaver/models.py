@@ -189,6 +189,45 @@ class LogEntry:
         )
 
 
+
+
+@dataclass
+class AppendEntriesRequest:
+    """
+    Raft RPC request sent by leader to replicate log entries and serve as heartbeat.
+    Enforces log matching invariant via prev_log_index and prev_log_term.
+    """
+    term: int
+    leader_id: str
+    prev_log_index: int = 0
+    prev_log_term: int = 0
+    entries: List[LogEntry] = field(default_factory=list)
+    leader_commit: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "leader_id": self.leader_id,
+            "prev_log_index": self.prev_log_index,
+            "prev_log_term": self.prev_log_term,
+            "entries": [e.to_dict() for e in self.entries],
+            "leader_commit": self.leader_commit,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AppendEntriesRequest":
+        raw_entries = data.get("entries", [])
+        parsed_entries = [LogEntry.from_dict(e) if isinstance(e, dict) else e for e in raw_entries]
+        return cls(
+            term=int(data["term"]),
+            leader_id=data["leader_id"],
+            prev_log_index=int(data.get("prev_log_index", 0)),
+            prev_log_term=int(data.get("prev_log_term", 0)),
+            entries=parsed_entries,
+            leader_commit=int(data.get("leader_commit", 0)),
+        )
+
+
 class MessageType(str, Enum):
     """RPC and network control message types."""
     PING = "PING"
