@@ -137,6 +137,58 @@ class RaftCommandType(str, Enum):
     BATCH = "BATCH"
     NOOP = "NOOP"
 
+
+
+@dataclass
+class LogEntry:
+    """
+    Term-indexed persistent entry in the Raft replicated commit log.
+    Maintains deterministic 1-based index numbering and execution metadata.
+    """
+    index: int
+    term: int
+    command_type: RaftCommandType = RaftCommandType.NOOP
+    key: Optional[str] = None
+    value: Optional[Any] = None
+    client_id: Optional[str] = None
+    timestamp: float = field(default_factory=time.time)
+    fencing_token: Optional[int] = None
+    extra_data: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "index": self.index,
+            "term": self.term,
+            "command_type": self.command_type.value if isinstance(self.command_type, RaftCommandType) else str(self.command_type),
+            "key": self.key,
+            "value": self.value,
+            "client_id": self.client_id,
+            "timestamp": self.timestamp,
+            "fencing_token": self.fencing_token,
+            "extra_data": self.extra_data,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LogEntry":
+        cmd_type = data.get("command_type", RaftCommandType.NOOP.value)
+        if isinstance(cmd_type, str):
+            try:
+                cmd_type = RaftCommandType(cmd_type)
+            except ValueError:
+                cmd_type = RaftCommandType.NOOP
+        return cls(
+            index=int(data["index"]),
+            term=int(data["term"]),
+            command_type=cmd_type,
+            key=data.get("key"),
+            value=data.get("value"),
+            client_id=data.get("client_id"),
+            timestamp=float(data.get("timestamp", time.time())),
+            fencing_token=int(data["fencing_token"]) if data.get("fencing_token") is not None else None,
+            extra_data=data.get("extra_data", {}),
+        )
+
+
 class MessageType(str, Enum):
     """RPC and network control message types."""
     PING = "PING"
