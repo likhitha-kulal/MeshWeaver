@@ -624,3 +624,18 @@ class RaftReplicationEngine:
             sender_udp_port=0,
             payload=resp.to_dict(),
         )
+
+    def synchronize_follower_progress(self, follower_id: str, success: bool, match_index: int, last_index: int) -> None:
+        """Update follower progress pointers based on RPC outcome."""
+        self.initialize_follower(follower_id)
+        follower = self.followers[follower_id]
+        follower.last_ack_time = time.time()
+
+        if success:
+            follower.match_index = max(follower.match_index, match_index)
+            follower.next_index = follower.match_index + 1
+            self.replication_successes += 1
+        else:
+            # Step down next_index on conflict to find common ancestor
+            follower.next_index = max(1, min(follower.next_index - 1, last_index + 1))
+            self.replication_failures += 1
