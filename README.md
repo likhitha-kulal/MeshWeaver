@@ -203,5 +203,3 @@ Run the full unit and integration test suite:
 python -m pytest
 ```
 
-
-<!-- Benchmark Checkpoint: Monte Carlo Pi 1M samples verified -->
