@@ -32,14 +32,21 @@ from meshweaver.raft_log import (
 from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
+    ConsensusJob,
+    ConsensusJobStatus,
     DistributedLock,
+    InstallSnapshotRequest,
+    InstallSnapshotResponse,
     LockAcquireResult,
     LogEntry,
+    Message,
+    MessageType,
+    NodeID,
+    NodeInfo,
     RaftCommandType,
 )
-
+from meshweaver.consensus_orchestrator import ConsensusJobOrchestrator, OrchestratorMetrics
 from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
-from meshweaver.models import Message, NodeID, NodeInfo
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.pipeline import PipelineMetrics, TaskPipeline
 from meshweaver.routing_table import RoutingTable
@@ -58,7 +65,10 @@ logger = logging.getLogger("meshweaver.node")
 
 class MeshNode:
     """
-    MeshWeaver peer node managing routing, health gossip, and task compute services.
+    Unified coordinator node for MeshWeaver peer-to-peer compute mesh.
+    Encapsulates DHT routing, Gossip health/load tracking, circuit breaker isolation,
+    load-balanced task scheduling, multi-tier priority QoS queues, distributed MapReduce,
+    consensus leader election, Raft state machine replication, and consensus job orchestration.
     """
 
     def __init__(
@@ -69,18 +79,18 @@ class MeshNode:
         node_id: Optional[NodeID] = None,
         k: int = 20,
         circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
+        breaker_config: Optional[CircuitBreakerConfig] = None,
         election_config: Optional[ElectionConfig] = None,
     ):
         self.host = host
         self.requested_udp_port = udp_port
-        self.requested_tcp_port = tcp_port if tcp_port is not None else (udp_port + 1)
-        self.node_id = node_id or NodeID()
-        self.routing_table = RoutingTable(self.node_id, k=k)
+        self.requested_tcp_port = tcp_port
+        self.node_id = node_id if node_id is not None else NodeID()
 
-        self.udp_transport: Optional[asyncio.DatagramTransport] = None
-        self.udp_protocol: Optional[UDPNodeProtocol] = None
-        self.dht_storage: Optional[DHTStorage] = None
-        self.tcp_server: Optional[TCPTaskServer] = None
+        self.bound_udp_port: int = 0
+        self.bound_tcp_port: int = 0
+
+        self.routing_table = RoutingTable(self.node_id, k=k)
         self.gossip_manager = GossipManager(
             node_id=self.node_id.hex(),
             host=self.host,
@@ -89,10 +99,8 @@ class MeshNode:
             dead_node_timeout=15.0,
         )
 
-        self.bound_udp_port: int = 0
-        self.bound_tcp_port: int = 0
-
-        self.circuit_breakers = CircuitBreakerRegistry(default_config=circuit_breaker_config)
+        cb_cfg = breaker_config or circuit_breaker_config
+        self.circuit_breakers = CircuitBreakerRegistry(default_config=cb_cfg)
         self.scheduler = TaskScheduler(
             local_node_id=self.node_id.hex(),
             gossip_manager=self.gossip_manager,
@@ -117,6 +125,13 @@ class MeshNode:
             send_message_fn=self._send_consensus_message,
             get_term_and_role_fn=self._get_term_and_role,
         )
+        self.consensus_orchestrator = ConsensusJobOrchestrator(
+            node_id=self.node_id.hex(),
+            raft_engine=self.raft_replication,
+            state_machine=self.state_machine,
+            get_available_workers_fn=self._get_active_worker_ids,
+            is_leader_fn=lambda: self.is_leader,
+        )
 
 
     @property
@@ -140,6 +155,14 @@ class MeshNode:
     @property
     def election_role(self) -> ElectionRole:
         return self.leader_election.role
+
+    def _get_active_worker_ids(self) -> List[str]:
+        workers = [self.node_id.hex()]
+        if self.gossip_manager:
+            for nid, peer in self.gossip_manager.get_all_peers().items():
+                if peer.is_alive:
+                    workers.append(nid)
+        return list(set(workers))
 
     def _get_active_peers_for_consensus(self) -> List[Tuple[str, int]]:
         peers = []
@@ -187,8 +210,11 @@ class MeshNode:
         def _on_vote_response(msg: Message) -> None:
             asyncio.create_task(self.leader_election.handle_vote_response(msg))
 
-        def _on_raft_response(msg: Message) -> None:
-            self.raft_replication.handle_append_entries_response(msg)
+        def _on_raft_response(msg: Message, addr: Optional[Tuple[str, int]] = None) -> None:
+            if msg.type == MessageType.RAFT_INSTALL_SNAPSHOT_RESPONSE:
+                self.raft_replication.handle_install_snapshot_response(msg, addr=addr)
+            else:
+                self.raft_replication.handle_append_entries_response(msg, addr=addr)
 
         udp_factory = lambda: UDPNodeProtocol(
             node_id=self.node_id,
@@ -200,6 +226,8 @@ class MeshNode:
             consensus_response_handler=_on_vote_response,
             raft_append_entries_handler=self.raft_replication.handle_append_entries_request,
             raft_response_handler=_on_raft_response,
+            raft_snapshot_handler=self.raft_replication.handle_install_snapshot_request,
+            raft_snapshot_response_handler=_on_raft_response,
         )
         transport, protocol = await loop.create_datagram_endpoint(
             udp_factory,
@@ -218,6 +246,7 @@ class MeshNode:
         )
         await self.gossip_manager.start()
         await self.leader_election.start()
+        await self.consensus_orchestrator.start()
 
         logger.info(
             f"=== MeshWeaver Node Online ===\n"
@@ -230,6 +259,9 @@ class MeshNode:
 
     async def stop(self) -> None:
         """Gracefully shut down all node networking and background services."""
+        if self.consensus_orchestrator:
+            await self.consensus_orchestrator.stop()
+
         if self.gossip_manager:
             await self.gossip_manager.stop()
 
@@ -308,6 +340,63 @@ class MeshNode:
 
     def get_raft_metrics(self) -> RaftMetrics:
         return self.raft_replication.get_raft_metrics()
+
+    # --- Consensus Job Orchestration & Cluster State APIs ---
+
+    async def submit_consensus_job(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        priority: int = 2,
+        timeout_seconds: float = 60.0,
+        max_retries: int = 3,
+        job_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Submit a compute job replicated across consensus state machine."""
+        return await self.consensus_orchestrator.submit_job(
+            func,
+            *args,
+            priority=priority,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            job_id=job_id,
+            **kwargs,
+        )
+
+    def get_consensus_job(self, job_id: str) -> Optional[ConsensusJob]:
+        """Fetch current state of a replicated consensus job."""
+        return self.consensus_orchestrator.get_job(job_id)
+
+    def list_consensus_jobs(self, status: Optional[ConsensusJobStatus] = None) -> List[ConsensusJob]:
+        """List all replicated consensus jobs optionally filtered by status."""
+        return self.consensus_orchestrator.list_jobs(status=status)
+
+    async def cancel_consensus_job(self, job_id: str) -> bool:
+        """Cancel a pending or running consensus job."""
+        return await self.consensus_orchestrator.cancel_job(job_id)
+
+    async def await_consensus_job(self, job_id: str, poll_interval: float = 0.05, timeout: float = 30.0) -> Any:
+        """Wait for a consensus job to complete and return its result."""
+        return await self.consensus_orchestrator.await_job_result(job_id, poll_interval=poll_interval, timeout=timeout)
+
+    def create_cluster_snapshot(self, last_included_index: Optional[int] = None) -> Dict[str, Any]:
+        """Create a state machine snapshot and compact logs."""
+        return self.raft_replication.create_snapshot(last_included_index=last_included_index)
+
+    async def reconfigure_membership(self, peer_id: str, action: str = "ADD", timeout: float = 5.0) -> List[str]:
+        """Dynamically add or remove a cluster consensus member."""
+        return await self.raft_replication.propose_command(
+            command_type=RaftCommandType.MEMBERSHIP_CHANGE,
+            key=peer_id,
+            extra_data={"action": action},
+            timeout=timeout,
+        )
+
+    def get_orchestrator_metrics(self) -> OrchestratorMetrics:
+        """Retrieve real-time consensus orchestrator metrics snapshot."""
+        return self.consensus_orchestrator.get_orchestrator_metrics()
+
 
     async def ping(self, target_host: str, target_udp_port: int, timeout: float = 5.0) -> Message:
         """Ping a remote node to check liveness."""
@@ -656,6 +745,8 @@ async def cli_main() -> None:
     parser.add_argument("--leader-demo", action="store_true", help="Run consensus leader election demo")
     parser.add_argument("--priority-demo", action="store_true", help="Run multi-tier Priority QoS compute demo")
     parser.add_argument("--priority-workers", type=int, default=5, help="Worker concurrency limit for priority queue")
+    parser.add_argument("--orchestrator-demo", action="store_true", help="Run consensus job orchestration demo")
+    parser.add_argument("--snapshot-demo", action="store_true", help="Run Raft log snapshot compaction demo")
 
     args = parser.parse_args()
 
@@ -686,6 +777,22 @@ async def cli_main() -> None:
             r_bg = await f_bg
             logger.info(f"Priority execution results: Critical={r_crit}, Normal={r_norm}, Background={r_bg}")
             logger.info(f"Priority QoS Stats: {node.get_queue_metrics()}")
+
+        if args.orchestrator_demo:
+            logger.info("Executing Consensus Job Orchestrator demo...")
+            job_id = await node.submit_consensus_job(sample_fibonacci, 28)
+            logger.info(f"Submitted consensus job: {job_id}. Awaiting replicated execution...")
+            job_res = await node.await_consensus_job(job_id, timeout=10.0)
+            logger.info(f"Consensus Job Result: fib(28) = {job_res}")
+            logger.info(f"Orchestrator Metrics: {node.get_orchestrator_metrics().to_dict()}")
+
+        if args.snapshot_demo:
+            logger.info("Executing Raft Snapshot Compaction demo...")
+            for i in range(1, 10):
+                await node.state_set(f"key_{i}", f"val_{i}")
+            snap = node.create_cluster_snapshot()
+            logger.info(f"Created Snapshot: last_index={snap['snapshot_last_index']}, keys={len(snap['data']['state'])}")
+            logger.info(f"Raft Metrics: {node.get_raft_metrics().to_dict()}")
 
         if args.ping_host and args.ping_port:
             pong = await node.ping(args.ping_host, args.ping_port)
@@ -763,9 +870,10 @@ async def cli_main() -> None:
             for nid, status in circuits.items():
                 logger.info(f"  -> Node {nid[:8]}... State={status['state']}, Failures={status['failure_count']}, Available={status['is_available']}")
 
-        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo or args.circuit_demo or args.circuit_reset or args.priority_demo):
+        if not (args.ping_host or args.bootstrap_host or args.demo_task or args.batch_demo or args.cache_demo or args.mapreduce_demo or args.pipeline_demo or args.circuit_demo or args.circuit_reset or args.priority_demo or args.orchestrator_demo or args.snapshot_demo):
             logger.info("Node running. Press Ctrl+C to shutdown.")
             await asyncio.Event().wait()
+
 
 
     except KeyboardInterrupt:
