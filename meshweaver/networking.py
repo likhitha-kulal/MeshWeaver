@@ -35,6 +35,8 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         consensus_response_handler: Optional[Callable[[Message], None]] = None,
         raft_append_entries_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
         raft_response_handler: Optional[Callable[[Message], None]] = None,
+        raft_snapshot_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
+        raft_snapshot_response_handler: Optional[Callable[[Message], None]] = None,
     ):
         self.node_id = node_id
         self.tcp_port = tcp_port
@@ -45,6 +47,8 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         self.consensus_response_handler = consensus_response_handler
         self.raft_append_entries_handler = raft_append_entries_handler
         self.raft_response_handler = raft_response_handler
+        self.raft_snapshot_handler = raft_snapshot_handler
+        self.raft_snapshot_response_handler = raft_snapshot_response_handler
         self.transport: Optional[asyncio.DatagramTransport] = None
         self._pending_requests: Dict[str, asyncio.Future[Message]] = {}
         self.local_udp_port: int = 0
@@ -109,7 +113,30 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
                         self.send_datagram(resp, addr[0], addr[1])
             elif msg.type == MessageType.RAFT_APPEND_ENTRIES_RESPONSE:
                 if self.raft_response_handler is not None:
-                    self.raft_response_handler(msg)
+                    try:
+                        self.raft_response_handler(msg, addr)
+                    except TypeError:
+                        self.raft_response_handler(msg)
+                if msg.msg_id in self._pending_requests:
+                    fut = self._pending_requests.pop(msg.msg_id)
+                    if not fut.done():
+                        fut.set_result(msg)
+            elif msg.type == MessageType.RAFT_INSTALL_SNAPSHOT_REQUEST:
+                if self.raft_snapshot_handler is not None:
+                    resp = self.raft_snapshot_handler(msg, addr)
+                    if resp is not None:
+                        self.send_datagram(resp, addr[0], addr[1])
+            elif msg.type == MessageType.RAFT_INSTALL_SNAPSHOT_RESPONSE:
+                if self.raft_snapshot_response_handler is not None:
+                    try:
+                        self.raft_snapshot_response_handler(msg, addr)
+                    except TypeError:
+                        self.raft_snapshot_response_handler(msg)
+                elif self.raft_response_handler is not None:
+                    try:
+                        self.raft_response_handler(msg, addr)
+                    except TypeError:
+                        self.raft_response_handler(msg)
                 if msg.msg_id in self._pending_requests:
                     fut = self._pending_requests.pop(msg.msg_id)
                     if not fut.done():
