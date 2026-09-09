@@ -252,14 +252,14 @@ class RaftLog:
 class ReplicatedStateMachine:
     """
     Deterministic replicated state machine supporting atomic KV operations,
-    Compare-And-Swap (CAS), monotonic fencing distributed locks, and batch transactions.
+    Compare-And-Swap (CAS), monotonic fencing distributed locks, batch transactions,
+    and consensus-backed distributed job queue execution.
     """
 
     def __init__(self) -> None:
         self._state: Dict[str, Any] = {}
         self._locks: Dict[str, DistributedLock] = {}
         self._jobs: Dict[str, ConsensusJob] = {}
-        self._active_jobs: Dict[str, str] = {}  # job_id -> worker_id
         self._cluster_members: Set[str] = set()
         self._fencing_token_counter: int = 0
         self._commands_applied: int = 0
@@ -271,6 +271,10 @@ class ReplicatedStateMachine:
     @property
     def key_count(self) -> int:
         return len(self._state)
+
+    @property
+    def job_count(self) -> int:
+        return len(self._jobs)
 
     @property
     def active_lock_count(self) -> int:
@@ -286,6 +290,20 @@ class ReplicatedStateMachine:
 
     def get_all_keys(self) -> List[str]:
         return list(self._state.keys())
+
+    def get_job(self, job_id: str) -> Optional[ConsensusJob]:
+        """Query state of a consensus-replicated job."""
+        return self._jobs.get(job_id)
+
+    def list_jobs(self, status: Optional[ConsensusJobStatus] = None) -> List[ConsensusJob]:
+        """List all consensus jobs optionally filtered by status."""
+        if status is None:
+            return list(self._jobs.values())
+        return [j for j in self._jobs.values() if j.status == status]
+
+    def get_cluster_members(self) -> List[str]:
+        """Return list of registered consensus cluster members."""
+        return sorted(list(self._cluster_members))
 
     def apply_command(self, entry: LogEntry) -> Any:
         """
@@ -336,6 +354,24 @@ class ReplicatedStateMachine:
 
         elif cmd == RaftCommandType.BATCH:
             return self._apply_batch(entry)
+
+        elif cmd == RaftCommandType.JOB_SUBMIT:
+            return self._apply_job_submit(entry)
+
+        elif cmd == RaftCommandType.JOB_ASSIGN:
+            return self._apply_job_assign(entry)
+
+        elif cmd == RaftCommandType.JOB_COMPLETE:
+            return self._apply_job_complete(entry)
+
+        elif cmd == RaftCommandType.JOB_FAIL:
+            return self._apply_job_fail(entry)
+
+        elif cmd == RaftCommandType.JOB_CANCEL:
+            return self._apply_job_cancel(entry)
+
+        elif cmd == RaftCommandType.MEMBERSHIP_CHANGE:
+            return self._apply_membership_change(entry)
 
         elif cmd == RaftCommandType.NOOP:
             return "NOOP_APPLIED"
@@ -403,6 +439,96 @@ class ReplicatedStateMachine:
         self._locks.pop(resource, None)
         return True
 
+    def _apply_job_submit(self, entry: LogEntry) -> Dict[str, Any]:
+        """Submit new job into consensus replicated queue."""
+        job_id = entry.key or entry.extra_data.get("job_id", "")
+        job = ConsensusJob(
+            job_id=job_id,
+            func_bytes=entry.extra_data.get("func_bytes"),
+            args_bytes=entry.extra_data.get("args_bytes"),
+            kwargs_bytes=entry.extra_data.get("kwargs_bytes"),
+            priority=int(entry.extra_data.get("priority", 2)),
+            status=ConsensusJobStatus.SUBMITTED,
+            submitted_by=entry.client_id or "",
+            timeout_seconds=float(entry.extra_data.get("timeout_seconds", 60.0)),
+            max_retries=int(entry.extra_data.get("max_retries", 3)),
+            created_at=entry.timestamp or time.time(),
+        )
+        self._jobs[job_id] = job
+        return job.to_dict()
+
+    def _apply_job_assign(self, entry: LogEntry) -> Optional[Dict[str, Any]]:
+        """Assign job to designated worker node with monotonic fencing token."""
+        job_id = entry.key or entry.extra_data.get("job_id", "")
+        worker_id = entry.extra_data.get("worker_id", "")
+        if job_id in self._jobs:
+            job = self._jobs[job_id]
+            self._fencing_token_counter += 1
+            job.status = ConsensusJobStatus.ASSIGNED
+            job.assigned_to = worker_id
+            job.assigned_at = entry.timestamp or time.time()
+            job.fencing_token = self._fencing_token_counter
+            return job.to_dict()
+        return None
+
+    def _apply_job_complete(self, entry: LogEntry) -> bool:
+        """Mark job completed with result and timestamp."""
+        job_id = entry.key or entry.extra_data.get("job_id", "")
+        fencing_token = entry.fencing_token or entry.extra_data.get("fencing_token")
+        result_bytes = entry.extra_data.get("result_bytes")
+
+        if job_id in self._jobs:
+            job = self._jobs[job_id]
+            if fencing_token is not None and job.fencing_token != fencing_token:
+                return False
+            job.status = ConsensusJobStatus.COMPLETED
+            job.result_bytes = result_bytes
+            job.completed_at = entry.timestamp or time.time()
+            return True
+        return False
+
+    def _apply_job_fail(self, entry: LogEntry) -> Optional[Dict[str, Any]]:
+        """Handle job execution failure with retry re-queueing."""
+        job_id = entry.key or entry.extra_data.get("job_id", "")
+        error_msg = entry.extra_data.get("error_message")
+
+        if job_id in self._jobs:
+            job = self._jobs[job_id]
+            job.retry_count += 1
+            job.error_message = error_msg
+            if job.retry_count >= job.max_retries:
+                job.status = ConsensusJobStatus.FAILED
+                job.completed_at = entry.timestamp or time.time()
+            else:
+                # Re-queue for re-assignment
+                job.status = ConsensusJobStatus.SUBMITTED
+                job.assigned_to = None
+                job.assigned_at = None
+            return job.to_dict()
+        return None
+
+    def _apply_job_cancel(self, entry: LogEntry) -> bool:
+        """Cancel submitted or running job."""
+        job_id = entry.key or entry.extra_data.get("job_id", "")
+        if job_id in self._jobs:
+            job = self._jobs[job_id]
+            if job.status not in (ConsensusJobStatus.COMPLETED, ConsensusJobStatus.CANCELLED):
+                job.status = ConsensusJobStatus.CANCELLED
+                job.completed_at = entry.timestamp or time.time()
+                return True
+        return False
+
+    def _apply_membership_change(self, entry: LogEntry) -> List[str]:
+        """Dynamically add or remove cluster consensus members."""
+        action = entry.extra_data.get("action", "ADD")
+        peer = entry.key
+        if peer:
+            if action == "ADD":
+                self._cluster_members.add(peer)
+            elif action == "REMOVE":
+                self._cluster_members.discard(peer)
+        return sorted(list(self._cluster_members))
+
     def get_lock(self, resource: str) -> Optional[DistributedLock]:
         """Retrieve active lock info for resource if not expired."""
         lock = self._locks.get(resource)
@@ -429,11 +555,13 @@ class ReplicatedStateMachine:
         return results
 
     def export_state(self) -> Dict[str, Any]:
-        """Export full snapshot representation of KV state and active locks."""
+        """Export full snapshot representation of KV state, active locks, jobs, and membership."""
         now = time.time()
         return {
             "state": dict(self._state),
             "locks": {k: v.to_dict() for k, v in self._locks.items() if not v.is_expired(now)},
+            "jobs": {k: v.to_dict() for k, v in self._jobs.items()},
+            "cluster_members": list(self._cluster_members),
             "fencing_token_counter": self._fencing_token_counter,
             "commands_applied": self._commands_applied,
         }
@@ -443,9 +571,14 @@ class ReplicatedStateMachine:
         self._state = dict(snapshot_data.get("state", {}))
         self._fencing_token_counter = int(snapshot_data.get("fencing_token_counter", 0))
         self._commands_applied = int(snapshot_data.get("commands_applied", 0))
+        self._cluster_members = set(snapshot_data.get("cluster_members", []))
         self._locks = {}
         for k, v in snapshot_data.get("locks", {}).items():
             self._locks[k] = DistributedLock.from_dict(v)
+        self._jobs = {}
+        for k, v in snapshot_data.get("jobs", {}).items():
+            self._jobs[k] = ConsensusJob.from_dict(v)
+
 
 
 
@@ -475,6 +608,9 @@ class RaftMetrics:
     replication_failures: int
     active_locks_count: int
     state_keys_count: int
+    total_snapshots_sent: int = 0
+    total_snapshots_installed: int = 0
+    jobs_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -492,13 +628,17 @@ class RaftMetrics:
             "replication_failures": self.replication_failures,
             "active_locks_count": self.active_locks_count,
             "state_keys_count": self.state_keys_count,
+            "total_snapshots_sent": self.total_snapshots_sent,
+            "total_snapshots_installed": self.total_snapshots_installed,
+            "jobs_count": self.jobs_count,
         }
 
 
 class RaftReplicationEngine:
     """
     Raft Log Replication Engine managing proposal submission, AppendEntries RPCs,
-    follower catch-up, majority quorum commit consensus, and state machine application.
+    follower catch-up, snapshot streaming (InstallSnapshot RPC), majority quorum
+    commit consensus, and state machine application.
     """
 
     def __init__(
@@ -526,6 +666,8 @@ class RaftReplicationEngine:
         self.total_replications_sent = 0
         self.replication_successes = 0
         self.replication_failures = 0
+        self.total_snapshots_sent = 0
+        self.total_snapshots_installed = 0
 
     def initialize_follower(self, follower_id: str) -> None:
         """Initialize progress tracking for a new or re-connected follower."""
@@ -536,8 +678,23 @@ class RaftReplicationEngine:
                 next_index=self.log.last_index + 1,
             )
 
+    def create_snapshot(self, last_included_index: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Create snapshot of state machine and compact log up to target index.
+        """
+        target_idx = last_included_index if last_included_index is not None else self.log.last_applied
+        if target_idx <= 0:
+            return {"snapshot_last_index": 0, "snapshot_last_term": 0, "data": self.state_machine.export_state()}
+
+        self.log.compact_log_before(target_idx)
+        return {
+            "snapshot_last_index": self.log._snapshot_last_index,
+            "snapshot_last_term": self.log._snapshot_last_term,
+            "data": self.state_machine.export_state(),
+        }
+
     def broadcast_append_entries(self) -> None:
-        """Dispatch AppendEntries RPC requests to all active cluster peers."""
+        """Dispatch AppendEntries or InstallSnapshot RPC requests to all active cluster peers."""
         term, role = self.get_term_and_role()
         if role != "LEADER":
             return
@@ -547,6 +704,31 @@ class RaftReplicationEngine:
             peer_id = f"{host}:{port}"
             follower = self.followers.get(peer_id)
             next_idx = follower.next_index if follower else 1
+
+            # Check if follower has fallen behind the compacted log boundary
+            if self.log._snapshot_last_index > 0 and next_idx <= self.log._snapshot_last_index:
+                # Follower needs an InstallSnapshot RPC
+                snapshot_req = InstallSnapshotRequest(
+                    term=term,
+                    leader_id=self.node_id,
+                    last_included_index=self.log._snapshot_last_index,
+                    last_included_term=self.log._snapshot_last_term,
+                    data=self.state_machine.export_state(),
+                    done=True,
+                )
+                msg = Message(
+                    type=MessageType.RAFT_INSTALL_SNAPSHOT_REQUEST,
+                    sender_id=self.node_id,
+                    sender_udp_port=0,
+                    payload=snapshot_req.to_dict(),
+                )
+                try:
+                    self.send_message(host, port, msg)
+                    self.total_snapshots_sent += 1
+                except Exception as e:
+                    logger.debug(f"Failed to send InstallSnapshot to {host}:{port}: {e}")
+                continue
+
             prev_idx = next_idx - 1
             prev_term = self.log.get_term(prev_idx)
             entries_to_send = self.log.slice_from(next_idx)
@@ -632,6 +814,58 @@ class RaftReplicationEngine:
             payload=resp.to_dict(),
         )
 
+    def handle_install_snapshot_request(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        """
+        Follower receiver implementation for Raft InstallSnapshot RPC:
+        Validates term, installs state machine snapshot, compacts local log,
+        and advances commit/applied indices.
+        """
+        try:
+            req = InstallSnapshotRequest.from_dict(msg.payload)
+        except Exception as e:
+            logger.warning(f"Malformed InstallSnapshotRequest: {e}")
+            return None
+
+        current_term, _ = self.get_term_and_role()
+
+        if req.term < current_term:
+            resp = InstallSnapshotResponse(
+                term=current_term,
+                follower_id=self.node_id,
+                success=False,
+                match_index=self.log.last_index,
+                error_message="Stale leader term",
+            )
+            return Message(
+                msg_id=msg.msg_id,
+                type=MessageType.RAFT_INSTALL_SNAPSHOT_RESPONSE,
+                sender_id=self.node_id,
+                sender_udp_port=0,
+                payload=resp.to_dict(),
+            )
+
+        # Restore state machine from snapshot
+        self.state_machine.import_state(req.data)
+        self.log.restore_snapshot({
+            "snapshot_last_index": req.last_included_index,
+            "snapshot_last_term": req.last_included_term,
+        })
+        self.total_snapshots_installed += 1
+
+        resp = InstallSnapshotResponse(
+            term=max(current_term, req.term),
+            follower_id=self.node_id,
+            success=True,
+            match_index=req.last_included_index,
+        )
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.RAFT_INSTALL_SNAPSHOT_RESPONSE,
+            sender_id=self.node_id,
+            sender_udp_port=0,
+            payload=resp.to_dict(),
+        )
+
     def synchronize_follower_progress(self, follower_id: str, success: bool, match_index: int, last_index: int) -> None:
         """Update follower progress pointers based on RPC outcome."""
         self.initialize_follower(follower_id)
@@ -661,10 +895,19 @@ class RaftReplicationEngine:
         total_cluster = len(active_peers) + 1
         quorum_required = (total_cluster // 2) + 1
 
-        # Collect match indices including leader's own last_index
+        # Collect match indices without duplicates across aliases (node_id vs host:port)
         match_indices = [self.log.last_index]
-        for follower in self.followers.values():
-            match_indices.append(follower.match_index)
+        seen_keys = set()
+        for host, port in active_peers:
+            peer_key = f"{host}:{port}"
+            if peer_key in self.followers:
+                match_indices.append(self.followers[peer_key].match_index)
+                seen_keys.add(peer_key)
+
+        for fid, f in self.followers.items():
+            if fid not in seen_keys and ":" not in fid:
+                match_indices.append(f.match_index)
+                seen_keys.add(fid)
 
         match_indices.sort(reverse=True)
 
@@ -679,7 +922,7 @@ class RaftReplicationEngine:
 
         return self.log.commit_index
 
-    def handle_append_entries_response(self, msg: Message) -> None:
+    def handle_append_entries_response(self, msg: Message, addr: Optional[Tuple[str, int]] = None) -> None:
         """Process follower AppendEntriesResponse on leader."""
         try:
             resp = AppendEntriesResponse.from_dict(msg.payload)
@@ -687,16 +930,61 @@ class RaftReplicationEngine:
             logger.warning(f"Malformed AppendEntriesResponse: {e}")
             return
 
-        follower_id = resp.follower_id or msg.sender_id
-        self.synchronize_follower_progress(
-            follower_id=follower_id,
-            success=resp.success,
-            match_index=resp.match_index,
-            last_index=resp.last_log_index,
-        )
+        follower_ids = set()
+        if resp.follower_id:
+            follower_ids.add(resp.follower_id)
+        if msg.sender_id:
+            follower_ids.add(msg.sender_id)
+        if addr:
+            follower_ids.add(f"{addr[0]}:{addr[1]}")
+        elif msg.sender_udp_port:
+            follower_ids.add(f"127.0.0.1:{msg.sender_udp_port}")
+
+        for fid in follower_ids:
+            self.synchronize_follower_progress(
+                follower_id=fid,
+                success=resp.success,
+                match_index=resp.match_index,
+                last_index=resp.last_log_index,
+            )
 
         if resp.success:
             self.check_and_advance_quorum_commit()
+
+    def handle_install_snapshot_response(self, msg: Message, addr: Optional[Tuple[str, int]] = None) -> None:
+        """Process follower InstallSnapshotResponse on leader."""
+        try:
+            resp = InstallSnapshotResponse.from_dict(msg.payload)
+        except Exception as e:
+            logger.warning(f"Malformed InstallSnapshotResponse: {e}")
+            return
+
+        follower_ids = set()
+        if resp.follower_id:
+            follower_ids.add(resp.follower_id)
+        if msg.sender_id:
+            follower_ids.add(msg.sender_id)
+        if addr:
+            follower_ids.add(f"{addr[0]}:{addr[1]}")
+        elif msg.sender_udp_port:
+            follower_ids.add(f"127.0.0.1:{msg.sender_udp_port}")
+
+        for fid in follower_ids:
+            self.initialize_follower(fid)
+            follower = self.followers[fid]
+            follower.last_ack_time = time.time()
+            if resp.success:
+                follower.match_index = max(follower.match_index, resp.match_index)
+                follower.next_index = follower.match_index + 1
+
+        if resp.success:
+            self.replication_successes += 1
+            self.check_and_advance_quorum_commit()
+            if any(f.next_index <= self.log.last_index for f in self.followers.values()):
+                self.broadcast_append_entries()
+        else:
+            self.replication_failures += 1
+
 
     def apply_committed_entries(self) -> List[Tuple[int, Any]]:
         """Apply all newly committed entries to the state machine in strict sequential order."""
@@ -782,4 +1070,8 @@ class RaftReplicationEngine:
             replication_failures=self.replication_failures,
             active_locks_count=self.state_machine.active_lock_count,
             state_keys_count=self.state_machine.key_count,
+            total_snapshots_sent=self.total_snapshots_sent,
+            total_snapshots_installed=self.total_snapshots_installed,
+            jobs_count=self.state_machine.job_count,
         )
+
