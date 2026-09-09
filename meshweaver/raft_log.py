@@ -14,7 +14,11 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
+    ConsensusJob,
+    ConsensusJobStatus,
     DistributedLock,
+    InstallSnapshotRequest,
+    InstallSnapshotResponse,
     LockAcquireResult,
     LogEntry,
     Message,
