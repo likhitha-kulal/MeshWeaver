@@ -134,14 +134,16 @@ class RaftCommandType(str, Enum):
     INCREMENT = "INCREMENT"
     LOCK_ACQUIRE = "LOCK_ACQUIRE"
     LOCK_RELEASE = "LOCK_RELEASE"
+    BATCH = "BATCH"
+    NOOP = "NOOP"
+    # Week 4 Day 3: Consensus Job Orchestration & Membership
     JOB_SUBMIT = "JOB_SUBMIT"
     JOB_ASSIGN = "JOB_ASSIGN"
     JOB_COMPLETE = "JOB_COMPLETE"
     JOB_FAIL = "JOB_FAIL"
     JOB_CANCEL = "JOB_CANCEL"
     MEMBERSHIP_CHANGE = "MEMBERSHIP_CHANGE"
-    BATCH = "BATCH"
-    NOOP = "NOOP"
+
 
 
 
@@ -273,6 +275,71 @@ class AppendEntriesResponse:
 
 
 @dataclass
+class InstallSnapshotRequest:
+    """
+    Raft InstallSnapshot RPC payload sent by leader when follower lags behind compacted snapshot.
+    """
+    term: int
+    leader_id: str
+    last_included_index: int
+    last_included_term: int
+    data: Dict[str, Any] = field(default_factory=dict)
+    done: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "leader_id": self.leader_id,
+            "last_included_index": self.last_included_index,
+            "last_included_term": self.last_included_term,
+            "data": self.data,
+            "done": self.done,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "InstallSnapshotRequest":
+        return cls(
+            term=int(data["term"]),
+            leader_id=data["leader_id"],
+            last_included_index=int(data["last_included_index"]),
+            last_included_term=int(data["last_included_term"]),
+            data=data.get("data", {}),
+            done=bool(data.get("done", True)),
+        )
+
+
+@dataclass
+class InstallSnapshotResponse:
+    """
+    Raft InstallSnapshot RPC response returned by follower acknowledging snapshot restore.
+    """
+    term: int
+    follower_id: str
+    success: bool
+    match_index: int = 0
+    error_message: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "term": self.term,
+            "follower_id": self.follower_id,
+            "success": self.success,
+            "match_index": self.match_index,
+            "error_message": self.error_message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "InstallSnapshotResponse":
+        return cls(
+            term=int(data["term"]),
+            follower_id=data["follower_id"],
+            success=bool(data["success"]),
+            match_index=int(data.get("match_index", 0)),
+            error_message=data.get("error_message"),
+        )
+
+
+@dataclass
 class DistributedLock:
     """
     Distributed mutual exclusion lease with monotonic fencing tokens.
@@ -369,6 +436,7 @@ class MessageType(str, Enum):
     RAFT_PROPOSE_RESPONSE = "RAFT_PROPOSE_RESPONSE"
     RAFT_SYNC_STATE = "RAFT_SYNC_STATE"
     RAFT_SYNC_STATE_RESPONSE = "RAFT_SYNC_STATE_RESPONSE"
+
 
 
 @dataclass
@@ -602,3 +670,90 @@ class PeerStatus(str, Enum):
     ALIVE = "ALIVE"
     SUSPECT = "SUSPECT"
     DEAD = "DEAD"
+
+
+class ConsensusJobStatus(str, Enum):
+    """Execution status for consensus-replicated distributed jobs."""
+    SUBMITTED = "SUBMITTED"
+    ASSIGNED = "ASSIGNED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+@dataclass
+class ConsensusJob:
+    """
+    Consensus-replicated cluster job descriptor.
+    Guarantees exactly-once dispatch, fencing token safety, and automatic orphan recovery.
+    """
+    job_id: str
+    func_bytes: Optional[str] = None       # Hex-encoded cloudpickle payload
+    args_bytes: Optional[str] = None       # Hex-encoded arguments tuple
+    kwargs_bytes: Optional[str] = None     # Hex-encoded kwargs dict
+    priority: int = 2                     # QoS priority tier (0=CRITICAL, 2=NORMAL, 4=BACKGROUND)
+    status: ConsensusJobStatus = ConsensusJobStatus.SUBMITTED
+    submitted_by: str = ""
+    assigned_to: Optional[str] = None
+    assigned_at: Optional[float] = None
+    timeout_seconds: float = 60.0
+    retry_count: int = 0
+    max_retries: int = 3
+    fencing_token: Optional[int] = None
+    result_bytes: Optional[str] = None     # Hex-encoded serialized result or None
+    error_message: Optional[str] = None
+    created_at: float = field(default_factory=time.time)
+    completed_at: Optional[float] = None
+
+    def is_expired(self, now: Optional[float] = None) -> bool:
+        if self.status not in (ConsensusJobStatus.ASSIGNED, ConsensusJobStatus.RUNNING):
+            return False
+        if self.assigned_at is None:
+            return False
+        current_ts = now if now is not None else time.time()
+        return current_ts > (self.assigned_at + self.timeout_seconds)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "func_bytes": self.func_bytes,
+            "args_bytes": self.args_bytes,
+            "kwargs_bytes": self.kwargs_bytes,
+            "priority": self.priority,
+            "status": self.status.value if isinstance(self.status, ConsensusJobStatus) else str(self.status),
+            "submitted_by": self.submitted_by,
+            "assigned_to": self.assigned_to,
+            "assigned_at": self.assigned_at,
+            "timeout_seconds": self.timeout_seconds,
+            "retry_count": self.retry_count,
+            "max_retries": self.max_retries,
+            "fencing_token": self.fencing_token,
+            "result_bytes": self.result_bytes,
+            "error_message": self.error_message,
+            "created_at": self.created_at,
+            "completed_at": self.completed_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ConsensusJob":
+        return cls(
+            job_id=data["job_id"],
+            func_bytes=data.get("func_bytes"),
+            args_bytes=data.get("args_bytes"),
+            kwargs_bytes=data.get("kwargs_bytes"),
+            priority=int(data.get("priority", 2)),
+            status=ConsensusJobStatus(data.get("status", ConsensusJobStatus.SUBMITTED.value)),
+            submitted_by=data.get("submitted_by", ""),
+            assigned_to=data.get("assigned_to"),
+            assigned_at=float(data["assigned_at"]) if data.get("assigned_at") is not None else None,
+            timeout_seconds=float(data.get("timeout_seconds", 60.0)),
+            retry_count=int(data.get("retry_count", 0)),
+            max_retries=int(data.get("max_retries", 3)),
+            fencing_token=int(data["fencing_token"]) if data.get("fencing_token") is not None else None,
+            result_bytes=data.get("result_bytes"),
+            error_message=data.get("error_message"),
+            created_at=float(data.get("created_at", time.time())),
+            completed_at=float(data["completed_at"]) if data.get("completed_at") is not None else None,
+        )
+
