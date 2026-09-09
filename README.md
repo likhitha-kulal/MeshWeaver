@@ -185,3 +185,6 @@ Run the full unit and integration test suite:
 ```bash
 python -m pytest
 ```
+
+
+## Week 4 Day 3: Consensus-Backed Distributed Job Orchestrator
