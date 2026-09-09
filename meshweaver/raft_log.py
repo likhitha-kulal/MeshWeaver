@@ -258,6 +258,9 @@ class ReplicatedStateMachine:
     def __init__(self) -> None:
         self._state: Dict[str, Any] = {}
         self._locks: Dict[str, DistributedLock] = {}
+        self._jobs: Dict[str, ConsensusJob] = {}
+        self._active_jobs: Dict[str, str] = {}  # job_id -> worker_id
+        self._cluster_members: Set[str] = set()
         self._fencing_token_counter: int = 0
         self._commands_applied: int = 0
 
