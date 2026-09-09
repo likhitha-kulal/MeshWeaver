@@ -11,8 +11,9 @@ from meshweaver.circuit_breaker import (
     CircuitBreakerRegistry,
     CircuitState,
 )
-from meshweaver.gossip import GossipManager, PeerLoadSnapshot
+from meshweaver.consensus_orchestrator import ConsensusJobOrchestrator, OrchestratorMetrics
 from meshweaver.dht_storage import DHTStorage
+from meshweaver.gossip import GossipManager, PeerLoadSnapshot
 from meshweaver.kbucket import KBucket
 from meshweaver.leader_election import (
     ConsensusMetrics,
@@ -25,8 +26,12 @@ from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
 from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
+    ConsensusJob,
+    ConsensusJobStatus,
     DistributedLock,
     ElectionRole,
+    InstallSnapshotRequest,
+    InstallSnapshotResponse,
     LeaderHeartbeat,
     LeaderHeartbeatAck,
     LockAcquireResult,
@@ -70,7 +75,7 @@ from meshweaver.scheduler import (
 from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
 
-__version__ = "0.4.5"
+__version__ = "0.5.0"
 
 __all__ = [
     "NodeID",
@@ -90,6 +95,8 @@ __all__ = [
     "ConsensusMetrics",
     "AppendEntriesRequest",
     "AppendEntriesResponse",
+    "InstallSnapshotRequest",
+    "InstallSnapshotResponse",
     "DistributedLock",
     "LockAcquireResult",
     "LogEntry",
@@ -99,6 +106,10 @@ __all__ = [
     "FollowerProgress",
     "RaftMetrics",
     "RaftReplicationEngine",
+    "ConsensusJob",
+    "ConsensusJobStatus",
+    "ConsensusJobOrchestrator",
+    "OrchestratorMetrics",
     "KBucket",
     "RoutingTable",
     "GossipManager",
@@ -138,3 +149,4 @@ __all__ = [
     "PriorityDispatcher",
     "PriorityMetrics",
 ]
+
