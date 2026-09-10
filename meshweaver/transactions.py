@@ -289,3 +289,119 @@ class TransactionCoordinator:
                 vote_yes=True,
                 fencing_tokens=fencing_tokens,
             )
+
+    async def commit_transaction(
+        self,
+        tx_id: str,
+        context: Optional[TransactionContext] = None,
+    ) -> bool:
+        """
+        Phase 2 of 2PC: Execute atomic commit.
+        Prepares if not already prepared, applies mutations to state machine,
+        increments OCC versions, logs to WAL, and releases acquired locks.
+        """
+        async with self._lock:
+            tx = self._active_txs.get(tx_id)
+            if not tx:
+                logger.error(f"Cannot commit unknown transaction '{tx_id}'")
+                return False
+
+        if tx.status != TxStatus.PREPARED:
+            prep_res = await self.prepare_transaction(tx_id, context)
+            if not prep_res.vote_yes:
+                await self.rollback_transaction(tx_id, reason=prep_res.error_message)
+                return False
+
+        async with self._lock:
+            # Apply all mutations to state machine
+            if self.state_machine:
+                for op in tx.operations:
+                    if op.op_type == TxOperationType.SET:
+                        self.state_machine._state[op.key] = op.value
+                    elif op.op_type == TxOperationType.INCREMENT:
+                        curr = self.state_machine.get(op.key, 0)
+                        try:
+                            self.state_machine._state[op.key] = int(curr) + op.delta
+                        except (ValueError, TypeError):
+                            self.state_machine._state[op.key] = op.delta
+                    elif op.op_type == TxOperationType.DELETE:
+                        self.state_machine._state.pop(op.key, None)
+
+                    # Bump key OCC version
+                    self._key_versions[op.key] = self._key_versions.get(op.key, 0) + 1
+
+            # Release all locks held by this tx
+            for key in tx.write_set.keys():
+                if self._key_locks.get(key) == tx_id:
+                    self._key_locks.pop(key, None)
+
+            tx.status = TxStatus.COMMITTED
+            tx.completed_at = time.time()
+            self.total_committed += 1
+
+        if self.wal_engine:
+            await self.wal_engine.append(
+                WALRecordType.TX_MARKER,
+                {
+                    "action": "COMMIT",
+                    "tx_id": tx_id,
+                    "status": TxStatus.COMMITTED.value,
+                    "ops_count": len(tx.operations),
+                },
+            )
+
+        logger.info(f"Transaction '{tx_id}' COMMITTED successfully ({len(tx.operations)} ops applied)")
+        return True
+
+    async def rollback_transaction(
+        self,
+        tx_id: str,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """
+        Phase 2 Abort of 2PC: Release all locks, discard mutations, and log abort.
+        """
+        async with self._lock:
+            tx = self._active_txs.get(tx_id)
+            if not tx:
+                return False
+
+            # Release all locks held by this tx
+            for key in tx.write_set.keys():
+                if self._key_locks.get(key) == tx_id:
+                    self._key_locks.pop(key, None)
+
+            tx.status = TxStatus.ABORTED
+            tx.error_message = reason
+            tx.completed_at = time.time()
+            self.total_aborted += 1
+
+        if self.wal_engine:
+            await self.wal_engine.append(
+                WALRecordType.TX_MARKER,
+                {
+                    "action": "ABORT",
+                    "tx_id": tx_id,
+                    "status": TxStatus.ABORTED.value,
+                    "reason": reason,
+                },
+            )
+
+        logger.warning(f"Transaction '{tx_id}' ABORTED: {reason}")
+        return True
+
+    def get_transaction(self, tx_id: str) -> Optional[TxRecord]:
+        return self._active_txs.get(tx_id)
+
+    def list_active_transactions(self) -> List[TxRecord]:
+        now = time.time()
+        return [tx for tx in self._active_txs.values() if not tx.is_expired(now)]
+
+    def get_metrics(self) -> Dict[str, Any]:
+        return {
+            "total_started": self.total_started,
+            "total_committed": self.total_committed,
+            "total_aborted": self.total_aborted,
+            "active_transactions": len(self._active_txs),
+            "locked_keys_count": len(self._key_locks),
+        }
