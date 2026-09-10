@@ -199,3 +199,93 @@ class TransactionCoordinator:
         if self.state_machine:
             return self.state_machine.get(key)
         return None
+
+    async def prepare_transaction(
+        self,
+        tx_id: str,
+        context: Optional[TransactionContext] = None,
+    ) -> TxPrepareResult:
+        """
+        Phase 1 of 2PC: Verify locks, check OCC version fencing, buffer write sets,
+        and log prepare intent in WAL.
+        """
+        async with self._lock:
+            tx = self._active_txs.get(tx_id)
+            if not tx:
+                return TxPrepareResult(
+                    tx_id=tx_id,
+                    participant_id=self.node_id,
+                    vote_yes=False,
+                    error_message=f"Transaction '{tx_id}' not found",
+                )
+
+            if context:
+                tx.operations = list(context.operations)
+                tx.read_set = dict(context.read_set)
+                tx.write_set = dict(context.write_set)
+
+            if tx.is_expired():
+                tx.status = TxStatus.TIMED_OUT
+                return TxPrepareResult(
+                    tx_id=tx_id,
+                    participant_id=self.node_id,
+                    vote_yes=False,
+                    error_message="Transaction lease expired before prepare",
+                )
+
+            # 1. Lock validation on write set
+            for key in tx.write_set.keys():
+                existing_holder = self._key_locks.get(key)
+                if existing_holder and existing_holder != tx_id:
+                    return TxPrepareResult(
+                        tx_id=tx_id,
+                        participant_id=self.node_id,
+                        vote_yes=False,
+                        error_message=f"Lock conflict on key '{key}': held by {existing_holder}",
+                    )
+
+            # 2. OCC version validation
+            for op in tx.operations:
+                if op.expected_version is not None:
+                    curr_ver = self._key_versions.get(op.key, 0)
+                    if op.expected_version != curr_ver:
+                        return TxPrepareResult(
+                            tx_id=tx_id,
+                            participant_id=self.node_id,
+                            vote_yes=False,
+                            error_message=(
+                                f"OCC version mismatch on key '{op.key}': "
+                                f"expected {op.expected_version}, current {curr_ver}"
+                            ),
+                        )
+
+            # 3. Grant locks and fencing tokens
+            fencing_tokens: Dict[str, int] = {}
+            for key in tx.write_set.keys():
+                self._key_locks[key] = tx_id
+                self._token_counter += 1
+                self._fencing_tokens[key] = self._token_counter
+                fencing_tokens[key] = self._token_counter
+
+            tx.status = TxStatus.PREPARED
+            tx.fencing_tokens = fencing_tokens
+
+            if self.wal_engine:
+                await self.wal_engine.append(
+                    WALRecordType.TX_MARKER,
+                    {
+                        "action": "PREPARE",
+                        "tx_id": tx_id,
+                        "status": TxStatus.PREPARED.value,
+                        "write_keys": list(tx.write_set.keys()),
+                        "fencing_tokens": fencing_tokens,
+                    },
+                )
+
+            logger.info(f"Transaction '{tx_id}' PREPARED successfully (keys={list(tx.write_set.keys())})")
+            return TxPrepareResult(
+                tx_id=tx_id,
+                participant_id=self.node_id,
+                vote_yes=True,
+                fencing_tokens=fencing_tokens,
+            )
