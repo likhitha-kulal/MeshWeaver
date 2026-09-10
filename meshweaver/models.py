@@ -1117,3 +1117,78 @@ class DistributedSemaphoreSpec:
             default_ttl_seconds=float(data.get("default_ttl_seconds", 30.0)),
         )
 
+
+class BackpressureStatus(str, Enum):
+    """Cluster load and backpressure urgency states."""
+    NORMAL = "NORMAL"        # Composite load < 0.60, 100% throughput admitted
+    MODERATE = "MODERATE"    # Composite load 0.60 - 0.75, slight token rate throttling
+    HIGH = "HIGH"            # Composite load 0.75 - 0.85, aggressive rate throttling, BACKGROUND shed
+    CRITICAL = "CRITICAL"    # Composite load > 0.85, severe backpressure, only CRITICAL admitted
+
+
+@dataclass
+class TokenBucketConfig:
+    """Token Bucket rate limiter configuration."""
+    capacity: float = 100.0
+    refill_rate: float = 50.0            # Tokens replenished per second
+    min_refill_rate: float = 5.0         # Floor under maximum backpressure
+    backpressure_threshold: float = 0.85 # Load watermark triggering load shedding
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "capacity": self.capacity,
+            "refill_rate": self.refill_rate,
+            "min_refill_rate": self.min_refill_rate,
+            "backpressure_threshold": self.backpressure_threshold,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TokenBucketConfig":
+        return cls(
+            capacity=float(data.get("capacity", 100.0)),
+            refill_rate=float(data.get("refill_rate", 50.0)),
+            min_refill_rate=float(data.get("min_refill_rate", 5.0)),
+            backpressure_threshold=float(data.get("backpressure_threshold", 0.85)),
+        )
+
+
+@dataclass
+class LoadShedderMetrics:
+    """Real-time operational telemetry from the adaptive load-shedding engine."""
+    cpu_percent: float = 0.0
+    ram_percent: float = 0.0
+    composite_watermark: float = 0.0
+    status: BackpressureStatus = BackpressureStatus.NORMAL
+    total_admitted: int = 0
+    total_shed: int = 0
+    effective_rate: float = 50.0
+    current_concurrency: int = 0
+    max_concurrency: int = 16
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "cpu_percent": self.cpu_percent,
+            "ram_percent": self.ram_percent,
+            "composite_watermark": self.composite_watermark,
+            "status": self.status.value if isinstance(self.status, BackpressureStatus) else str(self.status),
+            "total_admitted": self.total_admitted,
+            "total_shed": self.total_shed,
+            "effective_rate": self.effective_rate,
+            "current_concurrency": self.current_concurrency,
+            "max_concurrency": self.max_concurrency,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LoadShedderMetrics":
+        return cls(
+            cpu_percent=float(data.get("cpu_percent", 0.0)),
+            ram_percent=float(data.get("ram_percent", 0.0)),
+            composite_watermark=float(data.get("composite_watermark", 0.0)),
+            status=BackpressureStatus(data.get("status", BackpressureStatus.NORMAL.value)),
+            total_admitted=int(data.get("total_admitted", 0)),
+            total_shed=int(data.get("total_shed", 0)),
+            effective_rate=float(data.get("effective_rate", 50.0)),
+            current_concurrency=int(data.get("current_concurrency", 0)),
+            max_concurrency=int(data.get("max_concurrency", 16)),
+        )
+
