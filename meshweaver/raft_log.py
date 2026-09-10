@@ -24,6 +24,7 @@ from meshweaver.models import (
     Message,
     MessageType,
     RaftCommandType,
+    WALRecordType,
 )
 
 logger = logging.getLogger("meshweaver.raft")
@@ -649,6 +650,7 @@ class RaftReplicationEngine:
         get_active_peers_fn: Optional[Callable[[], List[Tuple[str, int]]]] = None,
         send_message_fn: Optional[Callable[[str, int, Message], None]] = None,
         get_term_and_role_fn: Optional[Callable[[], Tuple[int, str]]] = None,
+        wal_engine: Optional[Any] = None,
     ):
         self.node_id = node_id
         self.log = log or RaftLog()
@@ -656,6 +658,7 @@ class RaftReplicationEngine:
         self.get_active_peers = get_active_peers_fn or (lambda: [])
         self.send_message = send_message_fn or (lambda host, port, msg: None)
         self.get_term_and_role = get_term_and_role_fn or (lambda: (1, "LEADER"))
+        self.wal_engine = wal_engine
 
         self.followers: Dict[str, FollowerProgress] = {}
         self._pending_proposals: Dict[int, Any] = {}  # index -> asyncio.Future
