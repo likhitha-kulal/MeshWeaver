@@ -251,7 +251,60 @@ class WALEngine:
             bytes_written = self.active_segment.append(record, fsync=should_sync)
             self.total_records_written += 1
             self.total_bytes_written += bytes_written
-            if should_sync:
-                self.total_fsyncs += 1
-
             return record
+
+    async def rotate_segment(self) -> WALSegment:
+        """Manually trigger segment rotation to a new segment file."""
+        async with self._lock:
+            if not self.active_segment:
+                return self._create_new_segment(1)
+            next_id = self.active_segment.segment_id + 1
+            self.active_segment.close()
+            return self._create_new_segment(next_id)
+
+    def iter_all_records(self, verify_crc: bool = True) -> Iterator[WALRecord]:
+        """Iterate across all segments in sequence, reading every valid record."""
+        self._discover_segments()
+        for seg in self.segments:
+            yield from seg.iter_records(verify_crc=verify_crc)
+
+    def purge_segments_before(self, seq_no: int) -> int:
+        """
+        Delete older segment files where all records have seq_no < given seq_no.
+        Leaves active segment intact. Returns number of purged segment files.
+        """
+        purged = 0
+        remaining_segments = []
+        for seg in self.segments:
+            if seg == self.active_segment:
+                remaining_segments.append(seg)
+                continue
+            if seg.end_seq != -1 and seg.end_seq < seq_no:
+                seg.close()
+                try:
+                    if os.path.exists(seg.file_path):
+                        os.remove(seg.file_path)
+                        purged += 1
+                        logger.info(f"Purged old WAL segment: {seg.file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed deleting segment {seg.file_path}: {e}")
+                    remaining_segments.append(seg)
+            else:
+                remaining_segments.append(seg)
+        self.segments = remaining_segments
+        return purged
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Return operational telemetry for WAL storage."""
+        active_size = self.active_segment.file_size if self.active_segment else 0
+        return {
+            "wal_dir": self.wal_dir,
+            "current_seq": self.current_seq,
+            "segment_count": len(self.segments),
+            "active_segment_id": self.active_segment.segment_id if self.active_segment else 0,
+            "active_segment_size_bytes": active_size,
+            "total_records_written": self.total_records_written,
+            "total_bytes_written": self.total_bytes_written,
+            "total_fsyncs": self.total_fsyncs,
+            "fsync_mode": self.config.fsync_mode.value,
+        }
