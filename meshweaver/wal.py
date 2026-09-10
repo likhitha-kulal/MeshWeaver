@@ -358,6 +358,27 @@ class CrashRecoveryManager:
                         raft_log.advance_commit_index(commit_idx)
                     records_replayed += 1
 
+                elif record.record_type == WALRecordType.TX_MARKER:
+                    if record.payload.get("action") == "COMMIT" or record.payload.get("status") == "COMMITTED":
+                        ops = record.payload.get("operations", [])
+                        if state_machine is not None:
+                            for op in ops:
+                                op_type = op.get("op_type")
+                                key = op.get("key")
+                                val = op.get("value")
+                                delta = op.get("delta", 1)
+                                if op_type == "SET" and key is not None:
+                                    state_machine._state[key] = val
+                                elif op_type == "INCREMENT" and key is not None:
+                                    curr = state_machine.get(key, 0)
+                                    try:
+                                        state_machine._state[key] = int(curr) + delta
+                                    except (ValueError, TypeError):
+                                        state_machine._state[key] = delta
+                                elif op_type == "DELETE" and key is not None:
+                                    state_machine._state.pop(key, None)
+                    records_replayed += 1
+
                 elif record.record_type == WALRecordType.CHECKPOINT:
                     records_replayed += 1
 

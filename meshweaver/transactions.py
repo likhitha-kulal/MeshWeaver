@@ -347,6 +347,8 @@ class TransactionCoordinator:
                     "tx_id": tx_id,
                     "status": TxStatus.COMMITTED.value,
                     "ops_count": len(tx.operations),
+                    "operations": [op.to_dict() for op in tx.operations],
+                    "write_set": dict(tx.write_set),
                 },
             )
 
