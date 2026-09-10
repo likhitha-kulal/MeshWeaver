@@ -32,11 +32,15 @@ from meshweaver.raft_log import (
 from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
+    BackpressureStatus,
     ConsensusJob,
     ConsensusJobStatus,
+    DistributedBarrierSpec,
     DistributedLock,
+    DistributedSemaphoreSpec,
     InstallSnapshotRequest,
     InstallSnapshotResponse,
+    LoadShedderMetrics,
     LockAcquireResult,
     LogEntry,
     Message,
@@ -44,6 +48,11 @@ from meshweaver.models import (
     NodeID,
     NodeInfo,
     RaftCommandType,
+    StorageConfig,
+    TokenBucketConfig,
+    TxIsolationLevel,
+    TxRecord,
+    TxStatus,
 )
 from meshweaver.consensus_orchestrator import ConsensusJobOrchestrator, OrchestratorMetrics
 from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
@@ -53,6 +62,16 @@ from meshweaver.routing_table import RoutingTable
 from meshweaver.scheduler import RetryPolicy, SchedulingPolicy, TaskScheduler
 from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
+from meshweaver.wal import CrashRecoveryManager, WALEngine
+from meshweaver.storage import SnapshotDiskStore
+from meshweaver.transactions import TransactionContext, TransactionCoordinator
+from meshweaver.barrier import (
+    DistributedBarrier,
+    DistributedCountdownLatch,
+    DistributedSemaphore,
+    SynchronizationManager,
+)
+from meshweaver.adaptive_load_shedder import AdaptiveLoadShedder
 
 
 logging.basicConfig(
@@ -81,6 +100,8 @@ class MeshNode:
         circuit_breaker_config: Optional[CircuitBreakerConfig] = None,
         breaker_config: Optional[CircuitBreakerConfig] = None,
         election_config: Optional[ElectionConfig] = None,
+        storage_config: Optional[StorageConfig] = None,
+        token_bucket_config: Optional[TokenBucketConfig] = None,
     ):
         self.host = host
         self.requested_udp_port = udp_port
@@ -115,6 +136,14 @@ class MeshNode:
             get_active_peers_fn=self._get_active_peers_for_consensus,
             send_message_fn=self._send_consensus_message,
         )
+        self.storage_config = storage_config or StorageConfig(
+            node_storage_id=f"node_{self.node_id.hex()[:8]}"
+        )
+        self.wal_engine = WALEngine(self.storage_config)
+        self.snapshot_disk_store = SnapshotDiskStore(self.storage_config)
+        self.synchronization_manager = SynchronizationManager(self.node_id.hex())
+        self.load_shedder = AdaptiveLoadShedder(config=token_bucket_config)
+
         self.raft_log = RaftLog()
         self.state_machine = ReplicatedStateMachine()
         self.raft_replication = RaftReplicationEngine(
@@ -124,6 +153,13 @@ class MeshNode:
             get_active_peers_fn=self._get_active_peers_for_consensus,
             send_message_fn=self._send_consensus_message,
             get_term_and_role_fn=self._get_term_and_role,
+            wal_engine=self.wal_engine,
+        )
+        self.transaction_coordinator = TransactionCoordinator(
+            node_id=self.node_id.hex(),
+            raft_engine=self.raft_replication,
+            wal_engine=self.wal_engine,
+            state_machine=self.state_machine,
         )
         self.consensus_orchestrator = ConsensusJobOrchestrator(
             node_id=self.node_id.hex(),
