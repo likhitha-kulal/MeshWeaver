@@ -159,3 +159,19 @@ class AdaptiveLoadShedder:
             current_concurrency=self._current_concurrency,
             max_concurrency=self.max_concurrency,
         )
+
+    def tune_concurrency_limits(self, target_cpu_percent: float = 75.0) -> int:
+        """
+        Dynamically adjust max concurrency based on recent CPU utilization.
+        Decreases concurrency if CPU exceeds target, increases if cluster is under-utilized.
+        """
+        if self._cached_cpu > target_cpu_percent:
+            self.max_concurrency = max(self.min_concurrency, self.max_concurrency - 1)
+        elif self._cached_cpu < (target_cpu_percent - 20.0) and self._cached_ram < 70.0:
+            self.max_concurrency = min(64, self.max_concurrency + 1)
+        return self.max_concurrency
+
+    def reset_metrics(self) -> None:
+        """Reset operational telemetry counters."""
+        self.total_admitted = 0
+        self.total_shed = 0
