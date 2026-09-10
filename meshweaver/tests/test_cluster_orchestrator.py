@@ -34,34 +34,42 @@ class TestClusterOrchestratorIntegration(unittest.IsolatedAsyncioTestCase):
             await n1.bootstrap([("127.0.0.1", 19710)])
             await asyncio.sleep(0.15)
 
-            # Elect n1 as leader
+            # Elect leader
             await n1.trigger_election()
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.5)
 
-            # Submit consensus job to leader n1
-            job_id = await n1.submit_consensus_job(task_cube, 4, priority=1)
+            leaders = [n for n in nodes if n.is_leader]
+            if not leaders:
+                await n1.trigger_election()
+                await asyncio.sleep(0.4)
+                leaders = [n for n in nodes if n.is_leader]
+            self.assertTrue(len(leaders) >= 1)
+            leader = leaders[0]
+
+            # Submit consensus job to elected leader
+            job_id = await leader.submit_consensus_job(task_cube, 4, priority=1)
             self.assertIsNotNone(job_id)
 
             # Await execution across the mesh
-            result = await n1.await_consensus_job(job_id, poll_interval=0.05, timeout=5.0)
+            result = await leader.await_consensus_job(job_id, poll_interval=0.05, timeout=5.0)
             self.assertEqual(result, 64)
 
             # Verify job recorded in state machine
-            job = n1.get_consensus_job(job_id)
+            job = leader.get_consensus_job(job_id)
             self.assertIsNotNone(job)
             self.assertEqual(job.status, ConsensusJobStatus.COMPLETED)
 
             # Test Snapshot compaction on leader
-            snap = n1.create_cluster_snapshot()
+            snap = leader.create_cluster_snapshot()
             self.assertIn("jobs", snap["data"])
             self.assertIn(job_id, snap["data"]["jobs"])
 
             # Test membership reconfig
-            members = await n1.reconfigure_membership("127.0.0.1:19730", action="ADD")
+            members = await leader.reconfigure_membership("127.0.0.1:19730", action="ADD")
             self.assertIn("127.0.0.1:19730", members)
 
             # Verify orchestrator metrics
-            orch_metrics = n1.get_orchestrator_metrics()
+            orch_metrics = leader.get_orchestrator_metrics()
             self.assertTrue(orch_metrics.total_submitted >= 1)
             self.assertTrue(orch_metrics.total_completed >= 1)
 

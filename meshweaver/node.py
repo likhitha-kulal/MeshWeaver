@@ -623,6 +623,8 @@ class MeshNode:
         }
 
     # --- DHT and Networking APIs ---
+
+    async def ping(self, target_host: str, target_udp_port: int, timeout: float = 5.0) -> Message:
         """Ping a remote node to check liveness."""
         if not self.udp_protocol:
             raise RuntimeError("Node is not running")
