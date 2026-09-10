@@ -1022,3 +1022,98 @@ class TxRecord:
             error_message=data.get("error_message"),
         )
 
+
+class BarrierState(str, Enum):
+    """Lifecycle states for distributed barriers and rendezvous points."""
+    WAITING = "WAITING"        # Awaiting required number of parties to enter
+    RELEASED = "RELEASED"      # Quorum threshold met, all waiting parties released
+    TIMED_OUT = "TIMED_OUT"    # Timeout elapsed before threshold reached
+    CANCELLED = "CANCELLED"    # Manually aborted/cancelled by coordinator
+
+
+@dataclass
+class DistributedBarrierSpec:
+    """
+    Consensus-backed distributed synchronization barrier specification.
+    Coordinates N distinct nodes across parallel compute stages.
+    """
+    barrier_id: str
+    threshold: int
+    parties: List[str] = field(default_factory=list)
+    state: BarrierState = BarrierState.WAITING
+    timeout_seconds: float = 30.0
+    generation: int = 0
+    created_at: float = field(default_factory=time.time)
+    released_at: Optional[float] = None
+
+    def is_expired(self, now: Optional[float] = None) -> bool:
+        if self.state != BarrierState.WAITING:
+            return False
+        current_ts = now if now is not None else time.time()
+        return current_ts > (self.created_at + self.timeout_seconds)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "barrier_id": self.barrier_id,
+            "threshold": self.threshold,
+            "parties": self.parties,
+            "state": self.state.value if isinstance(self.state, BarrierState) else str(self.state),
+            "timeout_seconds": self.timeout_seconds,
+            "generation": self.generation,
+            "created_at": self.created_at,
+            "released_at": self.released_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DistributedBarrierSpec":
+        return cls(
+            barrier_id=data["barrier_id"],
+            threshold=int(data["threshold"]),
+            parties=data.get("parties", []),
+            state=BarrierState(data.get("state", BarrierState.WAITING.value)),
+            timeout_seconds=float(data.get("timeout_seconds", 30.0)),
+            generation=int(data.get("generation", 0)),
+            created_at=float(data.get("created_at", time.time())),
+            released_at=float(data["released_at"]) if data.get("released_at") is not None else None,
+        )
+
+
+@dataclass
+class DistributedSemaphoreSpec:
+    """
+    Consensus-backed distributed counting semaphore specification with lease TTL.
+    """
+    semaphore_id: str
+    total_permits: int
+    available_permits: int
+    holders: Dict[str, float] = field(default_factory=dict)  # holder_id -> lease_expiry
+    default_ttl_seconds: float = 30.0
+
+    def cleanup_expired_leases(self, now: Optional[float] = None) -> int:
+        """Reclaim permits whose lease TTL has elapsed."""
+        current_ts = now if now is not None else time.time()
+        expired = [h for h, exp in self.holders.items() if exp <= current_ts]
+        for h in expired:
+            del self.holders[h]
+            self.available_permits = min(self.total_permits, self.available_permits + 1)
+        return len(expired)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "semaphore_id": self.semaphore_id,
+            "total_permits": self.total_permits,
+            "available_permits": self.available_permits,
+            "holders": self.holders,
+            "default_ttl_seconds": self.default_ttl_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DistributedSemaphoreSpec":
+        return cls(
+            semaphore_id=data["semaphore_id"],
+            total_permits=int(data["total_permits"]),
+            available_permits=int(data["available_permits"]),
+            holders=data.get("holders", {}),
+            default_ttl_seconds=float(data.get("default_ttl_seconds", 30.0)),
+        )
+
