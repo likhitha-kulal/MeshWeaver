@@ -1,0 +1,201 @@
+"""
+MeshWeaver Distributed Two-Phase Commit (2PC) ACID Transaction Coordinator.
+Coordinates multi-key and multi-partition distributed atomic transactions with
+Optimistic Concurrency Control (OCC), version fencing tokens, and automatic rollback on conflict.
+"""
+
+import asyncio
+import logging
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from meshweaver.models import (
+    LogEntry,
+    RaftCommandType,
+    TxIsolationLevel,
+    TxOperation,
+    TxOperationType,
+    TxPrepareResult,
+    TxRecord,
+    TxStatus,
+    WALRecordType,
+)
+
+logger = logging.getLogger("meshweaver.transactions")
+
+
+class TransactionContext:
+    """
+    Client-facing transactional session context.
+    Buffers mutations (set, increment, delete) and snapshot reads locally
+    until explicit commit or rollback.
+    """
+
+    def __init__(
+        self,
+        tx_id: str,
+        coordinator: "TransactionCoordinator",
+        isolation_level: TxIsolationLevel = TxIsolationLevel.SERIALIZABLE,
+        timeout_seconds: float = 10.0,
+    ):
+        self.tx_id = tx_id
+        self.coordinator = coordinator
+        self.isolation_level = isolation_level
+        self.timeout_seconds = timeout_seconds
+        self.operations: List[TxOperation] = []
+        self.read_set: Dict[str, Any] = {}
+        self.write_set: Dict[str, Any] = {}
+        self._closed: bool = False
+
+    def set(self, key: str, value: Any, expected_version: Optional[int] = None) -> None:
+        """Buffer a SET operation in transaction write set."""
+        if self._closed:
+            raise RuntimeError("Transaction is closed")
+        self.operations.append(
+            TxOperation(
+                op_type=TxOperationType.SET,
+                key=key,
+                value=value,
+                expected_version=expected_version,
+            )
+        )
+        self.write_set[key] = value
+
+    def increment(self, key: str, delta: int = 1, expected_version: Optional[int] = None) -> None:
+        """Buffer an INCREMENT operation in transaction write set."""
+        if self._closed:
+            raise RuntimeError("Transaction is closed")
+        self.operations.append(
+            TxOperation(
+                op_type=TxOperationType.INCREMENT,
+                key=key,
+                delta=delta,
+                expected_version=expected_version,
+            )
+        )
+        # Update buffered local write set
+        curr = self.write_set.get(key, self.read_set.get(key, 0))
+        try:
+            self.write_set[key] = int(curr) + delta
+        except (ValueError, TypeError):
+            self.write_set[key] = delta
+
+    def delete(self, key: str, expected_version: Optional[int] = None) -> None:
+        """Buffer a DELETE operation in transaction write set."""
+        if self._closed:
+            raise RuntimeError("Transaction is closed")
+        self.operations.append(
+            TxOperation(
+                op_type=TxOperationType.DELETE,
+                key=key,
+                expected_version=expected_version,
+            )
+        )
+        self.write_set[key] = None
+
+    async def get(self, key: str) -> Any:
+        """
+        Read value for key. Returns locally buffered write if present,
+        otherwise fetches from coordinator state machine and registers in read set.
+        """
+        if self._closed:
+            raise RuntimeError("Transaction is closed")
+        if key in self.write_set:
+            return self.write_set[key]
+        val = await self.coordinator.tx_read_key(self.tx_id, key)
+        self.read_set[key] = val
+        return val
+
+    async def commit(self) -> bool:
+        """Execute 2PC prepare and commit phases."""
+        if self._closed:
+            raise RuntimeError("Transaction already closed")
+        self._closed = True
+        return await self.coordinator.commit_transaction(self.tx_id, self)
+
+    async def rollback(self, reason: Optional[str] = None) -> bool:
+        """Abort and rollback transaction."""
+        if self._closed:
+            return False
+        self._closed = True
+        return await self.coordinator.rollback_transaction(self.tx_id, reason=reason)
+
+    async def __aenter__(self) -> "TransactionContext":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        if not self._closed:
+            if exc_type is not None:
+                await self.rollback(reason=str(exc_val))
+            else:
+                await self.commit()
+
+
+class TransactionCoordinator:
+    """
+    Distributed 2-Phase Commit (2PC) Transaction Coordinator.
+    Enforces multi-key mutual exclusion, OCC version validation, atomic commits,
+    and automatic distributed rollback on abort or timeout.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        raft_engine: Optional[Any] = None,
+        wal_engine: Optional[Any] = None,
+        state_machine: Optional[Any] = None,
+    ):
+        self.node_id = node_id
+        self.raft_engine = raft_engine
+        self.wal_engine = wal_engine
+        self.state_machine = state_machine
+        self._active_txs: Dict[str, TxRecord] = {}
+        self._key_locks: Dict[str, str] = {}         # key -> tx_id
+        self._key_versions: Dict[str, int] = {}      # key -> version counter
+        self._fencing_tokens: Dict[str, int] = {}    # key -> fencing token
+        self._token_counter: int = 0
+        self._lock = asyncio.Lock()
+        self.total_started: int = 0
+        self.total_committed: int = 0
+        self.total_aborted: int = 0
+
+    async def begin_transaction(
+        self,
+        isolation_level: TxIsolationLevel = TxIsolationLevel.SERIALIZABLE,
+        timeout_seconds: float = 10.0,
+    ) -> TransactionContext:
+        """Initialize a new distributed transaction context."""
+        tx_id = f"tx_{uuid.uuid4().hex[:12]}"
+        tx_record = TxRecord(
+            tx_id=tx_id,
+            coordinator_id=self.node_id,
+            status=TxStatus.ACTIVE,
+            isolation_level=isolation_level,
+            timeout_seconds=timeout_seconds,
+            created_at=time.time(),
+        )
+
+        async with self._lock:
+            self._active_txs[tx_id] = tx_record
+            self.total_started += 1
+
+        if self.wal_engine:
+            await self.wal_engine.append(
+                WALRecordType.TX_MARKER,
+                {"action": "BEGIN", "tx_id": tx_id, "isolation_level": isolation_level.value},
+            )
+
+        logger.info(f"Transaction '{tx_id}' started with isolation={isolation_level.value}")
+        return TransactionContext(
+            tx_id=tx_id,
+            coordinator=self,
+            isolation_level=isolation_level,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def tx_read_key(self, tx_id: str, key: str) -> Any:
+        """Read key value from state machine."""
+        if self.state_machine:
+            return self.state_machine.get(key)
+        return None
