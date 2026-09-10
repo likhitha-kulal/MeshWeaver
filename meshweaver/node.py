@@ -527,8 +527,102 @@ class MeshNode:
         """Retrieve real-time consensus orchestrator metrics snapshot."""
         return self.consensus_orchestrator.get_orchestrator_metrics()
 
+    # --- Week 4 Day 4: 2PC Distributed Transactions & Synchronization APIs ---
 
-    async def ping(self, target_host: str, target_udp_port: int, timeout: float = 5.0) -> Message:
+    async def begin_transaction(
+        self,
+        isolation_level: TxIsolationLevel = TxIsolationLevel.SERIALIZABLE,
+        timeout_seconds: float = 10.0,
+    ) -> TransactionContext:
+        """Begin a multi-key atomic distributed transaction."""
+        return await self.transaction_coordinator.begin_transaction(
+            isolation_level=isolation_level,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def get_transaction(self, tx_id: str) -> Optional[TxRecord]:
+        """Retrieve transaction status and execution details."""
+        return self.transaction_coordinator.get_transaction(tx_id)
+
+    def list_active_transactions(self) -> List[TxRecord]:
+        """List all active uncommitted transactions."""
+        return self.transaction_coordinator.list_active_transactions()
+
+    def create_barrier(
+        self,
+        barrier_id: str,
+        threshold: int,
+        timeout_seconds: float = 30.0,
+    ) -> DistributedBarrier:
+        """Register or retrieve a distributed synchronization barrier."""
+        return self.synchronization_manager.get_or_create_barrier(
+            barrier_id=barrier_id,
+            threshold=threshold,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def enter_barrier(self, barrier_id: str, timeout: Optional[float] = None) -> bool:
+        """Enter a distributed rendezvous barrier and wait for quorum arrival."""
+        barrier = self.synchronization_manager.get_barrier(barrier_id)
+        if not barrier:
+            raise ValueError(f"Barrier '{barrier_id}' not registered")
+        return await barrier.enter(self.node_id.hex(), timeout=timeout)
+
+    def create_countdown_latch(self, latch_id: str, count: int) -> DistributedCountdownLatch:
+        """Create or retrieve a distributed countdown latch."""
+        return self.synchronization_manager.get_or_create_latch(latch_id=latch_id, count=count)
+
+    async def count_down_latch(self, latch_id: str, delta: int = 1) -> int:
+        """Decrement countdown latch count."""
+        latch = self.synchronization_manager.get_or_create_latch(latch_id, count=0)
+        return await latch.count_down(delta=delta)
+
+    async def await_latch(self, latch_id: str, timeout: Optional[float] = None) -> bool:
+        """Await until latch count reaches zero."""
+        latch = self.synchronization_manager.get_or_create_latch(latch_id, count=0)
+        return await latch.wait(timeout=timeout)
+
+    async def acquire_semaphore(
+        self,
+        semaphore_id: str,
+        total_permits: int = 1,
+        ttl_seconds: Optional[float] = None,
+        timeout: float = 10.0,
+    ) -> bool:
+        """Acquire a permit from a lease-based distributed semaphore."""
+        sem = self.synchronization_manager.get_or_create_semaphore(
+            semaphore_id=semaphore_id,
+            total_permits=total_permits,
+        )
+        return await sem.acquire(self.node_id.hex(), ttl_seconds=ttl_seconds, timeout=timeout)
+
+    async def release_semaphore(self, semaphore_id: str) -> bool:
+        """Release a permit held on a distributed semaphore."""
+        sem = self.synchronization_manager.get_semaphore(semaphore_id)
+        if not sem:
+            return False
+        return await sem.release(self.node_id.hex())
+
+    def get_load_shedder_metrics(self) -> LoadShedderMetrics:
+        """Retrieve real-time telemetry from adaptive load shedder."""
+        return self.load_shedder.get_metrics()
+
+    def get_wal_metrics(self) -> Dict[str, Any]:
+        """Retrieve Write-Ahead Log operational metrics."""
+        return self.wal_engine.get_metrics()
+
+    def get_transaction_metrics(self) -> Dict[str, Any]:
+        """Retrieve 2PC transaction coordinator metrics."""
+        return self.transaction_coordinator.get_metrics()
+
+    def get_synchronization_metrics(self) -> Dict[str, Any]:
+        """Retrieve active barrier and semaphore metrics."""
+        return {
+            "barriers": [b.to_dict() for b in self.synchronization_manager.get_all_barrier_specs()],
+            "semaphores": [s.to_dict() for s in self.synchronization_manager.get_all_semaphore_specs()],
+        }
+
+    # --- DHT and Networking APIs ---
         """Ping a remote node to check liveness."""
         if not self.udp_protocol:
             raise RuntimeError("Node is not running")

@@ -26,14 +26,20 @@ from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
 from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
+    BackpressureStatus,
+    BarrierState,
     ConsensusJob,
     ConsensusJobStatus,
+    DistributedBarrierSpec,
     DistributedLock,
+    DistributedSemaphoreSpec,
     ElectionRole,
+    FsyncMode,
     InstallSnapshotRequest,
     InstallSnapshotResponse,
     LeaderHeartbeat,
     LeaderHeartbeatAck,
+    LoadShedderMetrics,
     LockAcquireResult,
     LogEntry,
     Message,
@@ -41,10 +47,20 @@ from meshweaver.models import (
     NodeID,
     NodeInfo,
     RaftCommandType,
+    StorageConfig,
     TaskEnvelope,
     TaskResult,
+    TokenBucketConfig,
+    TxIsolationLevel,
+    TxOperation,
+    TxOperationType,
+    TxPrepareResult,
+    TxRecord,
+    TxStatus,
     VoteRequest,
     VoteResponse,
+    WALRecord,
+    WALRecordType,
 )
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
 from meshweaver.node import MeshNode
@@ -74,8 +90,18 @@ from meshweaver.scheduler import (
 )
 from meshweaver.task_cache import TaskCache
 from meshweaver.task_serializer import RemoteExecutionError, TaskSerializer
+from meshweaver.wal import CrashRecoveryManager, WALEngine, WALSegment
+from meshweaver.storage import SnapshotDiskStore
+from meshweaver.transactions import TransactionContext, TransactionCoordinator
+from meshweaver.barrier import (
+    DistributedBarrier,
+    DistributedCountdownLatch,
+    DistributedSemaphore,
+    SynchronizationManager,
+)
+from meshweaver.adaptive_load_shedder import AdaptiveLoadShedder
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "NodeID",
@@ -148,5 +174,32 @@ __all__ = [
     "PriorityTaskQueue",
     "PriorityDispatcher",
     "PriorityMetrics",
+    "WALRecord",
+    "WALRecordType",
+    "FsyncMode",
+    "StorageConfig",
+    "WALEngine",
+    "WALSegment",
+    "CrashRecoveryManager",
+    "SnapshotDiskStore",
+    "TxStatus",
+    "TxIsolationLevel",
+    "TxOperation",
+    "TxOperationType",
+    "TxPrepareResult",
+    "TxRecord",
+    "TransactionContext",
+    "TransactionCoordinator",
+    "BarrierState",
+    "DistributedBarrierSpec",
+    "DistributedSemaphoreSpec",
+    "DistributedBarrier",
+    "DistributedCountdownLatch",
+    "DistributedSemaphore",
+    "SynchronizationManager",
+    "BackpressureStatus",
+    "TokenBucketConfig",
+    "LoadShedderMetrics",
+    "AdaptiveLoadShedder",
 ]
 
