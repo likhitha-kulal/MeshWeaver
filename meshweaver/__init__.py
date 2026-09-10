@@ -26,15 +26,23 @@ from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
 from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
+<<<<<<< HEAD
     BackpressureStatus,
     BarrierState,
     ConsensusJob,
     ConsensusJobStatus,
     DistributedBarrierSpec,
+=======
+    ConsensusJob,
+    ConsensusJobStatus,
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
     DistributedLock,
     DistributedSemaphoreSpec,
     ElectionRole,
+<<<<<<< HEAD
     FsyncMode,
+=======
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
     InstallSnapshotRequest,
     InstallSnapshotResponse,
     LeaderHeartbeat,
@@ -102,7 +110,11 @@ from meshweaver.barrier import (
 from meshweaver.adaptive_load_shedder import AdaptiveLoadShedder
 from meshweaver.dashboard import ClusterTelemetryDashboard
 
+<<<<<<< HEAD
 __version__ = "0.6.0"
+=======
+__version__ = "0.5.0"
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
 
 __all__ = [
     "NodeID",

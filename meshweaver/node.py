@@ -32,6 +32,7 @@ from meshweaver.raft_log import (
 from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
+<<<<<<< HEAD
     BackpressureStatus,
     ConsensusJob,
     ConsensusJobStatus,
@@ -41,6 +42,13 @@ from meshweaver.models import (
     InstallSnapshotRequest,
     InstallSnapshotResponse,
     LoadShedderMetrics,
+=======
+    ConsensusJob,
+    ConsensusJobStatus,
+    DistributedLock,
+    InstallSnapshotRequest,
+    InstallSnapshotResponse,
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
     LockAcquireResult,
     LogEntry,
     Message,
@@ -168,6 +176,13 @@ class MeshNode:
             get_available_workers_fn=self._get_active_worker_ids,
             is_leader_fn=lambda: self.is_leader,
         )
+        self.consensus_orchestrator = ConsensusJobOrchestrator(
+            node_id=self.node_id.hex(),
+            raft_engine=self.raft_replication,
+            state_machine=self.state_machine,
+            get_available_workers_fn=self._get_active_worker_ids,
+            is_leader_fn=lambda: self.is_leader,
+        )
 
 
     @property
@@ -274,10 +289,13 @@ class MeshNode:
             raft_response_handler=_on_raft_response,
             raft_snapshot_handler=self.raft_replication.handle_install_snapshot_request,
             raft_snapshot_response_handler=_on_raft_response,
+<<<<<<< HEAD
             tx_prepare_handler=self._handle_tx_prepare,
             tx_commit_handler=self._handle_tx_commit,
             tx_abort_handler=self._handle_tx_abort,
             barrier_sync_handler=self._handle_barrier_sync,
+=======
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
         )
         transport, protocol = await loop.create_datagram_endpoint(
             udp_factory,
@@ -527,6 +545,7 @@ class MeshNode:
         """Retrieve real-time consensus orchestrator metrics snapshot."""
         return self.consensus_orchestrator.get_orchestrator_metrics()
 
+<<<<<<< HEAD
     # --- Week 4 Day 4: 2PC Distributed Transactions & Synchronization APIs ---
 
     async def begin_transaction(
@@ -623,6 +642,8 @@ class MeshNode:
         }
 
     # --- DHT and Networking APIs ---
+=======
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
 
     async def ping(self, target_host: str, target_udp_port: int, timeout: float = 5.0) -> Message:
         """Ping a remote node to check liveness."""

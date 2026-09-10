@@ -144,6 +144,7 @@ class RaftCommandType(str, Enum):
     JOB_FAIL = "JOB_FAIL"
     JOB_CANCEL = "JOB_CANCEL"
     MEMBERSHIP_CHANGE = "MEMBERSHIP_CHANGE"
+<<<<<<< HEAD
     # Week 4 Day 4: 2PC Distributed Transactions & Synchronization Primitives
     TX_PREPARE = "TX_PREPARE"
     TX_COMMIT = "TX_COMMIT"
@@ -152,6 +153,8 @@ class RaftCommandType(str, Enum):
     BARRIER_ENTER = "BARRIER_ENTER"
     SEMAPHORE_ACQUIRE = "SEMAPHORE_ACQUIRE"
     SEMAPHORE_RELEASE = "SEMAPHORE_RELEASE"
+=======
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
 
 
 
@@ -454,6 +457,7 @@ class MessageType(str, Enum):
     TX_ABORT_RESPONSE = "TX_ABORT_RESPONSE"
     BARRIER_SYNC_REQUEST = "BARRIER_SYNC_REQUEST"
     BARRIER_SYNC_RESPONSE = "BARRIER_SYNC_RESPONSE"
+
 
 
 
@@ -775,6 +779,7 @@ class ConsensusJob:
             completed_at=float(data["completed_at"]) if data.get("completed_at") is not None else None,
         )
 
+<<<<<<< HEAD
 
 class WALRecordType(str, Enum):
     """Types of records logged in the Write-Ahead Log (WAL)."""
@@ -1209,3 +1214,5 @@ class LoadShedderMetrics:
             max_concurrency=int(data.get("max_concurrency", 16)),
         )
 
+=======
+>>>>>>> 2293809c167798128689ac1c5037673f1b9fb217
