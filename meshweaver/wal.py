@@ -12,7 +12,7 @@ import os
 import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from meshweaver.models import FsyncMode, StorageConfig, WALRecord, WALRecordType
+from meshweaver.models import FsyncMode, LogEntry, StorageConfig, WALRecord, WALRecordType
 
 logger = logging.getLogger("meshweaver.wal")
 
@@ -308,3 +308,68 @@ class WALEngine:
             "total_fsyncs": self.total_fsyncs,
             "fsync_mode": self.config.fsync_mode.value,
         }
+
+
+class CrashRecoveryManager:
+    """
+    Coordinates recovery and state reconstruction from persistent WAL segments
+    and snapshot checkpoints on disk.
+    """
+
+    @classmethod
+    def recover(
+        cls,
+        wal_engine: WALEngine,
+        state_machine: Any,
+        raft_log: Optional[Any] = None,
+        verify_crc: bool = True,
+    ) -> Tuple[int, int, int]:
+        """
+        Replay all records from WAL segments into the ReplicatedStateMachine and RaftLog.
+        Returns (records_replayed, errors_count, last_seq_no).
+        """
+        records_replayed = 0
+        errors_count = 0
+        last_seq_no = 0
+
+        for record in wal_engine.iter_all_records(verify_crc=verify_crc):
+            last_seq_no = max(last_seq_no, record.seq_no)
+            try:
+                if record.record_type == WALRecordType.ENTRY:
+                    entry_dict = record.payload.get("entry") or record.payload
+                    entry = LogEntry.from_dict(entry_dict)
+
+                    if raft_log is not None:
+                        if entry.index > raft_log.last_log_index:
+                            raft_log.append_entry(
+                                entry.term,
+                                entry.command_type,
+                                entry.key,
+                                entry.value,
+                                entry.client_id,
+                                entry.fencing_token,
+                                entry.extra_data,
+                            )
+
+                    is_committed = record.payload.get("committed", True)
+                    if is_committed and state_machine is not None:
+                        state_machine.apply_command(entry)
+                    records_replayed += 1
+
+                elif record.record_type == WALRecordType.COMMIT_MARKER:
+                    commit_idx = int(record.payload.get("commit_index", 0))
+                    if raft_log is not None:
+                        raft_log.commit_index = max(raft_log.commit_index, commit_idx)
+                    records_replayed += 1
+
+                elif record.record_type == WALRecordType.CHECKPOINT:
+                    records_replayed += 1
+
+            except Exception as e:
+                logger.error(f"Error replaying WAL record seq {record.seq_no}: {e}")
+                errors_count += 1
+
+        logger.info(
+            f"Crash recovery complete: replayed {records_replayed} records (errors={errors_count}, last_seq={last_seq_no})"
+        )
+        return records_replayed, errors_count, last_seq_no
