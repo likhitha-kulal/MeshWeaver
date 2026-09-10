@@ -11,6 +11,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Union
 import uuid
+import zlib
 
 
 class NodeID:
@@ -756,4 +757,117 @@ class ConsensusJob:
             created_at=float(data.get("created_at", time.time())),
             completed_at=float(data["completed_at"]) if data.get("completed_at") is not None else None,
         )
+
+
+class WALRecordType(str, Enum):
+    """Types of records logged in the Write-Ahead Log (WAL)."""
+    ENTRY = "ENTRY"                      # Regular Raft/state machine log entry
+    SNAPSHOT_POINTER = "SNAPSHOT_POINTER"# Pointer to compacted snapshot file on disk
+    COMMIT_MARKER = "COMMIT_MARKER"      # Explicit commit index barrier marker
+    TX_MARKER = "TX_MARKER"              # 2PC Transaction prepare/commit/abort marker
+    CHECKPOINT = "CHECKPOINT"            # Full sync checkpoint marker
+
+
+class FsyncMode(str, Enum):
+    """Disk flush (fsync) durability policies for WAL storage."""
+    ALWAYS = "ALWAYS"        # fsync on every single write (maximum durability, lowest throughput)
+    PERIODIC = "PERIODIC"    # fsync in background at fixed time intervals (balanced)
+    BATCH = "BATCH"          # fsync after N pending records or batch commits (high throughput)
+    OFF = "OFF"              # Rely on OS disk buffer cache (fastest, memory-safe)
+
+
+@dataclass
+class StorageConfig:
+    """Configuration for persistent disk storage, WAL segments, and snapshotting."""
+    data_dir: str = ".mesh_data"
+    node_storage_id: str = "node_default"
+    max_segment_size_bytes: int = 10 * 1024 * 1024  # 10 MB per segment file
+    fsync_mode: FsyncMode = FsyncMode.PERIODIC
+    fsync_interval_seconds: float = 0.5
+    snapshot_interval_entries: int = 1000
+    max_snapshots_retained: int = 3
+    wal_cleanup_retention_segments: int = 5
+    enable_wal: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "data_dir": self.data_dir,
+            "node_storage_id": self.node_storage_id,
+            "max_segment_size_bytes": self.max_segment_size_bytes,
+            "fsync_mode": self.fsync_mode.value if isinstance(self.fsync_mode, FsyncMode) else str(self.fsync_mode),
+            "fsync_interval_seconds": self.fsync_interval_seconds,
+            "snapshot_interval_entries": self.snapshot_interval_entries,
+            "max_snapshots_retained": self.max_snapshots_retained,
+            "wal_cleanup_retention_segments": self.wal_cleanup_retention_segments,
+            "enable_wal": self.enable_wal,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StorageConfig":
+        return cls(
+            data_dir=data.get("data_dir", ".mesh_data"),
+            node_storage_id=data.get("node_storage_id", "node_default"),
+            max_segment_size_bytes=int(data.get("max_segment_size_bytes", 10 * 1024 * 1024)),
+            fsync_mode=FsyncMode(data.get("fsync_mode", FsyncMode.PERIODIC.value)),
+            fsync_interval_seconds=float(data.get("fsync_interval_seconds", 0.5)),
+            snapshot_interval_entries=int(data.get("snapshot_interval_entries", 1000)),
+            max_snapshots_retained=int(data.get("max_snapshots_retained", 3)),
+            wal_cleanup_retention_segments=int(data.get("wal_cleanup_retention_segments", 5)),
+            enable_wal=bool(data.get("enable_wal", True)),
+        )
+
+
+@dataclass
+class WALRecord:
+    """
+    Append-only record stored in WAL segment files.
+    Includes monotonic sequence number, record type, JSON payload, timestamp, and CRC32 checksum.
+    """
+    seq_no: int
+    record_type: WALRecordType
+    payload: Dict[str, Any]
+    timestamp: float = field(default_factory=time.time)
+    crc32: int = 0
+
+    def __post_init__(self) -> None:
+        if self.crc32 == 0:
+            self.crc32 = self.compute_crc32()
+
+    def compute_crc32(self) -> int:
+        """Calculate CRC32 checksum across seq_no, record_type, payload JSON, and timestamp."""
+        payload_json = json.dumps(self.payload, sort_keys=True)
+        type_val = self.record_type.value if isinstance(self.record_type, WALRecordType) else str(self.record_type)
+        raw = f"{self.seq_no}:{type_val}:{self.timestamp:.6f}:{payload_json}".encode("utf-8")
+        return zlib.crc32(raw) & 0xFFFFFFFF
+
+    def verify_crc32(self) -> bool:
+        """Verify the stored checksum against computed CRC32."""
+        return self.crc32 == self.compute_crc32()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "seq_no": self.seq_no,
+            "record_type": self.record_type.value if isinstance(self.record_type, WALRecordType) else str(self.record_type),
+            "payload": self.payload,
+            "timestamp": self.timestamp,
+            "crc32": self.crc32,
+        }
+
+    def to_json_line(self) -> str:
+        """Serialize record to single-line JSON string with newline for segment file append."""
+        return json.dumps(self.to_dict()) + "\n"
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WALRecord":
+        return cls(
+            seq_no=int(data["seq_no"]),
+            record_type=WALRecordType(data["record_type"]),
+            payload=data["payload"],
+            timestamp=float(data.get("timestamp", time.time())),
+            crc32=int(data.get("crc32", 0)),
+        )
+
+    @classmethod
+    def from_json_line(cls, line: str) -> "WALRecord":
+        return cls.from_dict(json.loads(line.strip()))
 
