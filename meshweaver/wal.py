@@ -340,26 +340,22 @@ class CrashRecoveryManager:
                     entry = LogEntry.from_dict(entry_dict)
 
                     if raft_log is not None:
-                        if entry.index > raft_log.last_log_index:
-                            raft_log.append_entry(
-                                entry.term,
-                                entry.command_type,
-                                entry.key,
-                                entry.value,
-                                entry.client_id,
-                                entry.fencing_token,
-                                entry.extra_data,
-                            )
+                        if entry.index > raft_log.last_index:
+                            raft_log.append_entry(entry)
 
                     is_committed = record.payload.get("committed", True)
-                    if is_committed and state_machine is not None:
-                        state_machine.apply_command(entry)
+                    if is_committed:
+                        if raft_log is not None:
+                            raft_log.advance_commit_index(entry.index)
+                            raft_log.mark_applied(entry.index)
+                        if state_machine is not None:
+                            state_machine.apply_command(entry)
                     records_replayed += 1
 
                 elif record.record_type == WALRecordType.COMMIT_MARKER:
                     commit_idx = int(record.payload.get("commit_index", 0))
                     if raft_log is not None:
-                        raft_log.commit_index = max(raft_log.commit_index, commit_idx)
+                        raft_log.advance_commit_index(commit_idx)
                     records_replayed += 1
 
                 elif record.record_type == WALRecordType.CHECKPOINT:
