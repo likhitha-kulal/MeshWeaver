@@ -871,3 +871,154 @@ class WALRecord:
     def from_json_line(cls, line: str) -> "WALRecord":
         return cls.from_dict(json.loads(line.strip()))
 
+
+class TxStatus(str, Enum):
+    """Lifecycle status for distributed Two-Phase Commit (2PC) transactions."""
+    ACTIVE = "ACTIVE"          # Transaction initialized, read/write ops being buffered
+    PREPARING = "PREPARING"    # Coordinator dispatched PREPARE RPCs to participants
+    PREPARED = "PREPARED"      # All participants voted YES, locks/leases guaranteed
+    COMMITTING = "COMMITTING"  # Coordinator dispatched COMMIT RPCs
+    COMMITTED = "COMMITTED"    # All operations applied atomically and locks released
+    ABORTING = "ABORTING"      # Coordinator dispatched ABORT RPCs due to conflict/timeout
+    ABORTED = "ABORTED"        # Rollback executed and locks released
+    TIMED_OUT = "TIMED_OUT"    # Transaction lease expired prior to commit
+
+
+class TxIsolationLevel(str, Enum):
+    """Transaction isolation semantics."""
+    READ_COMMITTED = "READ_COMMITTED"
+    REPEATABLE_READ = "REPEATABLE_READ"
+    SERIALIZABLE = "SERIALIZABLE"
+
+
+class TxOperationType(str, Enum):
+    """Operation types within an atomic transaction."""
+    SET = "SET"
+    DELETE = "DELETE"
+    INCREMENT = "INCREMENT"
+
+
+@dataclass
+class TxOperation:
+    """Individual state mutation within a distributed transaction."""
+    op_type: TxOperationType
+    key: str
+    value: Optional[Any] = None
+    delta: int = 1
+    expected_version: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "op_type": self.op_type.value if isinstance(self.op_type, TxOperationType) else str(self.op_type),
+            "key": self.key,
+            "value": self.value,
+            "delta": self.delta,
+            "expected_version": self.expected_version,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TxOperation":
+        return cls(
+            op_type=TxOperationType(data["op_type"]),
+            key=data["key"],
+            value=data.get("value"),
+            delta=int(data.get("delta", 1)),
+            expected_version=int(data["expected_version"]) if data.get("expected_version") is not None else None,
+        )
+
+
+@dataclass
+class TxPrepareResult:
+    """Participant response to a 2PC PREPARE request."""
+    tx_id: str
+    participant_id: str
+    vote_yes: bool
+    error_message: Optional[str] = None
+    fencing_tokens: Dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "tx_id": self.tx_id,
+            "participant_id": self.participant_id,
+            "vote_yes": self.vote_yes,
+            "error_message": self.error_message,
+            "fencing_tokens": self.fencing_tokens,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TxPrepareResult":
+        return cls(
+            tx_id=data["tx_id"],
+            participant_id=data["participant_id"],
+            vote_yes=bool(data["vote_yes"]),
+            error_message=data.get("error_message"),
+            fencing_tokens=data.get("fencing_tokens", {}),
+        )
+
+
+@dataclass
+class TxRecord:
+    """
+    Complete descriptor of a distributed 2PC transaction.
+    Maintains read/write sets, operations, participating nodes, fencing tokens, and execution timeouts.
+    """
+    tx_id: str
+    coordinator_id: str
+    status: TxStatus = TxStatus.ACTIVE
+    isolation_level: TxIsolationLevel = TxIsolationLevel.SERIALIZABLE
+    operations: List[TxOperation] = field(default_factory=list)
+    read_set: Dict[str, Any] = field(default_factory=dict)
+    write_set: Dict[str, Any] = field(default_factory=dict)
+    participants: List[str] = field(default_factory=list)
+    prepared_participants: List[str] = field(default_factory=list)
+    fencing_tokens: Dict[str, int] = field(default_factory=dict)
+    timeout_seconds: float = 10.0
+    created_at: float = field(default_factory=time.time)
+    completed_at: Optional[float] = None
+    error_message: Optional[str] = None
+
+    def is_expired(self, now: Optional[float] = None) -> bool:
+        if self.status in (TxStatus.COMMITTED, TxStatus.ABORTED):
+            return False
+        current_ts = now if now is not None else time.time()
+        return current_ts > (self.created_at + self.timeout_seconds)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "tx_id": self.tx_id,
+            "coordinator_id": self.coordinator_id,
+            "status": self.status.value if isinstance(self.status, TxStatus) else str(self.status),
+            "isolation_level": self.isolation_level.value if isinstance(self.isolation_level, TxIsolationLevel) else str(self.isolation_level),
+            "operations": [op.to_dict() for op in self.operations],
+            "read_set": self.read_set,
+            "write_set": self.write_set,
+            "participants": self.participants,
+            "prepared_participants": self.prepared_participants,
+            "fencing_tokens": self.fencing_tokens,
+            "timeout_seconds": self.timeout_seconds,
+            "created_at": self.created_at,
+            "completed_at": self.completed_at,
+            "error_message": self.error_message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TxRecord":
+        raw_ops = data.get("operations", [])
+        parsed_ops = [TxOperation.from_dict(o) if isinstance(o, dict) else o for o in raw_ops]
+        return cls(
+            tx_id=data["tx_id"],
+            coordinator_id=data["coordinator_id"],
+            status=TxStatus(data.get("status", TxStatus.ACTIVE.value)),
+            isolation_level=TxIsolationLevel(data.get("isolation_level", TxIsolationLevel.SERIALIZABLE.value)),
+            operations=parsed_ops,
+            read_set=data.get("read_set", {}),
+            write_set=data.get("write_set", {}),
+            participants=data.get("participants", []),
+            prepared_participants=data.get("prepared_participants", []),
+            fencing_tokens=data.get("fencing_tokens", {}),
+            timeout_seconds=float(data.get("timeout_seconds", 10.0)),
+            created_at=float(data.get("created_at", time.time())),
+            completed_at=float(data["completed_at"]) if data.get("completed_at") is not None else None,
+            error_message=data.get("error_message"),
+        )
+
