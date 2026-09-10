@@ -206,7 +206,8 @@ class ClusterTelemetryDashboard:
                 for b_name, b in sync_mgr._barriers.items():
                     sync_items.append(f"Barrier '{b_name}' ({len(b.parties)}/{b.threshold} arrived)")
                 for l_name, l in sync_mgr._latches.items():
-                    sync_items.append(f"Latch '{l_name}' (count={l.count})")
+                    l_count = getattr(l, "current_count", getattr(l, "_count", 0))
+                    sync_items.append(f"Latch '{l_name}' (count={l_count})")
                 for s_name, s in sync_mgr._semaphores.items():
                     sync_items.append(f"Semaphore '{s_name}' (avail={s.available_permits}/{s.total_permits})")
 
