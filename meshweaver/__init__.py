@@ -100,6 +100,7 @@ from meshweaver.barrier import (
     SynchronizationManager,
 )
 from meshweaver.adaptive_load_shedder import AdaptiveLoadShedder
+from meshweaver.dashboard import ClusterTelemetryDashboard
 
 __version__ = "0.6.0"
 
@@ -201,5 +202,6 @@ __all__ = [
     "TokenBucketConfig",
     "LoadShedderMetrics",
     "AdaptiveLoadShedder",
+    "ClusterTelemetryDashboard",
 ]
 
