@@ -37,6 +37,10 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         raft_response_handler: Optional[Callable[[Message], None]] = None,
         raft_snapshot_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
         raft_snapshot_response_handler: Optional[Callable[[Message], None]] = None,
+        tx_prepare_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
+        tx_commit_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
+        tx_abort_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
+        barrier_sync_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
     ):
         self.node_id = node_id
         self.tcp_port = tcp_port
@@ -49,6 +53,10 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         self.raft_response_handler = raft_response_handler
         self.raft_snapshot_handler = raft_snapshot_handler
         self.raft_snapshot_response_handler = raft_snapshot_response_handler
+        self.tx_prepare_handler = tx_prepare_handler
+        self.tx_commit_handler = tx_commit_handler
+        self.tx_abort_handler = tx_abort_handler
+        self.barrier_sync_handler = barrier_sync_handler
         self.transport: Optional[asyncio.DatagramTransport] = None
         self._pending_requests: Dict[str, asyncio.Future[Message]] = {}
         self.local_udp_port: int = 0
@@ -137,6 +145,36 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
                         self.raft_response_handler(msg, addr)
                     except TypeError:
                         self.raft_response_handler(msg)
+                if msg.msg_id in self._pending_requests:
+                    fut = self._pending_requests.pop(msg.msg_id)
+                    if not fut.done():
+                        fut.set_result(msg)
+            elif msg.type == MessageType.TX_PREPARE_REQUEST:
+                if self.tx_prepare_handler is not None:
+                    resp = self.tx_prepare_handler(msg, addr)
+                    if resp is not None:
+                        self.send_datagram(resp, addr[0], addr[1])
+            elif msg.type == MessageType.TX_COMMIT_REQUEST:
+                if self.tx_commit_handler is not None:
+                    resp = self.tx_commit_handler(msg, addr)
+                    if resp is not None:
+                        self.send_datagram(resp, addr[0], addr[1])
+            elif msg.type == MessageType.TX_ABORT_REQUEST:
+                if self.tx_abort_handler is not None:
+                    resp = self.tx_abort_handler(msg, addr)
+                    if resp is not None:
+                        self.send_datagram(resp, addr[0], addr[1])
+            elif msg.type == MessageType.BARRIER_SYNC_REQUEST:
+                if self.barrier_sync_handler is not None:
+                    resp = self.barrier_sync_handler(msg, addr)
+                    if resp is not None:
+                        self.send_datagram(resp, addr[0], addr[1])
+            elif msg.type in (
+                MessageType.TX_PREPARE_RESPONSE,
+                MessageType.TX_COMMIT_RESPONSE,
+                MessageType.TX_ABORT_RESPONSE,
+                MessageType.BARRIER_SYNC_RESPONSE,
+            ):
                 if msg.msg_id in self._pending_requests:
                     fut = self._pending_requests.pop(msg.msg_id)
                     if not fut.done():
