@@ -51,6 +51,11 @@ class ClusterTelemetryDashboard:
     def dim(self, text: str) -> str:
         return self._colorize(text, "2")
 
+    def _get_node_id_str(self, n: MeshNode) -> str:
+        if hasattr(n.node_id, "hex"):
+            return n.node_id.hex()[:8]
+        return str(n.node_id)[:8]
+
     def render_frame(self, nodes: List[MeshNode]) -> str:
         """
         Renders a single frame of cluster telemetry as an ASCII string.
@@ -67,8 +72,11 @@ class ClusterTelemetryDashboard:
         now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         total_nodes = len(nodes)
         leaders = [n for n in nodes if getattr(n, "is_leader", False)]
-        leader_id = leaders[0].node_id if leaders else "None (Electing...)"
-        current_term = max((getattr(n.raft, "current_term", 0) for n in nodes), default=0) if nodes else 0
+        leader_id = self._get_node_id_str(leaders[0]) if leaders else "None (Electing...)"
+        current_term = max(
+            (getattr(n.raft_replication, "current_term", 0) for n in nodes if hasattr(n, "raft_replication")),
+            default=0,
+        ) if nodes else 0
 
         summary_line = f" Time: {now_str}  │  Nodes: {total_nodes}  │  Leader: {leader_id}  │  Term: {current_term} "
         lines.append(f"║{summary_line.ljust(width - 2)}║")
@@ -84,8 +92,11 @@ class ClusterTelemetryDashboard:
         lines.append("║  " + "─" * 94 + "  ║")
 
         for n in nodes:
-            nid = n.node_id
-            role = n.state.value if hasattr(n, "state") and hasattr(n.state, "value") else str(n.state)
+            nid = self._get_node_id_str(n)
+            role = "FOLLOWER"
+            if hasattr(n, "leader_election") and hasattr(n.leader_election, "role"):
+                role = n.leader_election.role.value if hasattr(n.leader_election.role, "value") else str(n.leader_election.role)
+
             if role.upper() == "LEADER":
                 role_str = self.green(f"★ {role}")
             elif role.upper() == "CANDIDATE":
@@ -93,11 +104,11 @@ class ClusterTelemetryDashboard:
             else:
                 role_str = self.dim(f"• {role}")
 
-            endpoint = f"{n.host}:{n.port}"
-            term = str(getattr(n.raft, "current_term", 0))
-            log_idx = str(getattr(n.raft.log, "last_index", 0))
-            commit_idx = str(getattr(n.raft, "commit_index", 0))
-            active_str = self.green("ONLINE") if getattr(n, "_running", False) else self.red("STOPPED")
+            endpoint = f"{n.host}:{n.bound_udp_port or n.requested_udp_port}"
+            term = str(getattr(n.raft_replication, "current_term", 0)) if hasattr(n, "raft_replication") else "0"
+            log_idx = str(getattr(n.raft_log, "last_index", 0)) if hasattr(n, "raft_log") else "0"
+            commit_idx = str(getattr(n.raft_replication, "commit_index", 0)) if hasattr(n, "raft_replication") else "0"
+            active_str = self.green("ONLINE") if getattr(n, "is_running", True) else self.red("STOPPED")
 
             row = f"  {nid:<16} {role_str:<21} {endpoint:<22} {term:<6} {log_idx:<9} {commit_idx:<12} {active_str:<19}"
             lines.append(f"║{row}║")
@@ -117,25 +128,25 @@ class ClusterTelemetryDashboard:
             shedder = getattr(n, "load_shedder", None)
             if shedder:
                 w_val = shedder.calculate_watermark()
-                status = shedder.current_status.value
+                status = shedder.get_status().value if hasattr(shedder, "get_status") else "NORMAL"
                 if status == "NORMAL":
                     status_fmt = self.green(f"[NORMAL]")
-                elif status == "WARNING":
-                    status_fmt = self.yellow(f"[WARNING]")
+                elif status in ("HIGH", "MODERATE", "WARNING"):
+                    status_fmt = self.yellow(f"[{status}]")
                 elif status == "CRITICAL":
                     status_fmt = self.red(f"[CRITICAL]")
                 else:
-                    status_fmt = self.red(f"[SHEDDING]")
+                    status_fmt = self.red(f"[{status}]")
 
-                cpu = f"{shedder.metrics.cpu_utilization * 100:.1f}%"
-                mem = f"{shedder.metrics.memory_utilization * 100:.1f}%"
-                inflight = str(shedder.metrics.in_flight_requests)
+                cpu = f"{shedder._cached_cpu:.1f}%"
+                mem = f"{shedder._cached_ram:.1f}%"
+                inflight = str(shedder.current_concurrency)
                 tokens = f"{shedder._tokens:.1f}"
                 w_str = f"{w_val:.3f}"
             else:
                 w_str, status_fmt, cpu, mem, inflight, tokens = "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
 
-            row = f"  {n.node_id:<16} {w_str:<16} {status_fmt:<23} {cpu:<8} {mem:<8} {inflight:<12} {tokens:<10}"
+            row = f"  {self._get_node_id_str(n):<16} {w_str:<16} {status_fmt:<23} {cpu:<8} {mem:<8} {inflight:<12} {tokens:<10}"
             lines.append(f"║{row}║")
 
         lines.append("╠" + "═" * (width - 2) + "╣")
@@ -146,7 +157,7 @@ class ClusterTelemetryDashboard:
         # Aggregate transactions across all nodes
         all_txs: Dict[str, Any] = {}
         for n in nodes:
-            tx_coord = getattr(n, "tx_coordinator", None)
+            tx_coord = getattr(n, "transaction_coordinator", None)
             if tx_coord:
                 all_txs.update(tx_coord._active_txs)
 
@@ -157,8 +168,9 @@ class ClusterTelemetryDashboard:
                 + " ║"
             )
             lines.append("║  " + "─" * 94 + "  ║")
-            for tx_id, tx_ctx in list(all_txs.items())[:5]:
-                st = tx_ctx.status.value
+            for tx_id, tx_item in list(all_txs.items())[:5]:
+                status_val = getattr(tx_item, "status", None)
+                st = status_val.value if hasattr(status_val, "value") else str(status_val or "ACTIVE")
                 if st == "COMMITTED":
                     st_fmt = self.green(st)
                 elif st in ("ABORTED", "FAILED"):
@@ -166,12 +178,19 @@ class ClusterTelemetryDashboard:
                 else:
                     st_fmt = self.yellow(st)
 
-                iso = tx_ctx.isolation_level.value
-                keys = ",".join(list(tx_ctx.write_set.keys())) if tx_ctx.write_set else "(empty)"
+                iso_val = getattr(tx_item, "isolation_level", None)
+                iso = iso_val.value if hasattr(iso_val, "value") else str(iso_val or "SERIALIZABLE")
+                
+                keys_list = []
+                if hasattr(tx_item, "operations") and tx_item.operations:
+                    keys_list = [getattr(op, "key", "") for op in tx_item.operations]
+                elif hasattr(tx_item, "write_set") and tx_item.write_set:
+                    keys_list = list(tx_item.write_set.keys())
+                keys = ",".join([k for k in keys_list if k]) if keys_list else "(empty)"
                 if len(keys) > 22:
                     keys = keys[:19] + "..."
-                coord = getattr(tx_ctx, "coordinator_id", "local")
-                row = f"  {tx_id:<24} {st_fmt:<23} {iso:<14} {keys:<24} {coord:<14}"
+                coord = str(getattr(tx_item, "coordinator_id", "local"))[:12]
+                row = f"  {tx_id[:22]:<24} {st_fmt:<23} {iso:<14} {keys:<24} {coord:<14}"
                 lines.append(f"║{row}║")
         else:
             lines.append(f"║  {self.dim('No active or historical 2PC transactions recorded.')}".ljust(width + 5) + "║")
@@ -182,17 +201,17 @@ class ClusterTelemetryDashboard:
         lines.append(f"║  {self.bold('Active Synchronization Primitives:')}".ljust(width + 5) + "║")
         sync_items = []
         for n in nodes:
-            sync_mgr = getattr(n, "sync_manager", None)
+            sync_mgr = getattr(n, "synchronization_manager", None)
             if sync_mgr:
                 for b_name, b in sync_mgr._barriers.items():
-                    sync_items.append(f"Barrier '{b_name}' ({len(b._arrived_parties)}/{b.spec.parties_count} arrived)")
+                    sync_items.append(f"Barrier '{b_name}' ({len(b.parties)}/{b.threshold} arrived)")
                 for l_name, l in sync_mgr._latches.items():
                     sync_items.append(f"Latch '{l_name}' (count={l.count})")
                 for s_name, s in sync_mgr._semaphores.items():
-                    sync_items.append(f"Semaphore '{s_name}' (avail={s.available_permits()}/{s.spec.total_permits})")
+                    sync_items.append(f"Semaphore '{s_name}' (avail={s.available_permits}/{s.total_permits})")
 
         if sync_items:
-            for item in set(sync_items)[:4]:
+            for item in list(set(sync_items))[:4]:
                 lines.append(f"║    • {item}".ljust(width - 1) + "║")
         else:
             lines.append(f"║    • {self.dim('No barriers or semaphores currently registered.')}".ljust(width + 5) + "║")
@@ -212,14 +231,14 @@ class ClusterTelemetryDashboard:
             wal = getattr(n, "wal_engine", None)
             if wal:
                 mode = wal.config.fsync_mode.value
-                recs = str(wal.records_written)
-                b_written = f"{wal.bytes_written} B"
-                segs = str(len(wal.list_segments()))
+                recs = str(getattr(wal, "total_records_written", 0))
+                b_written = f"{getattr(wal, 'total_bytes_written', 0)} B"
+                segs = str(len(getattr(wal, "segments", [])))
                 recov = self.green("ACTIVE / DURABLE")
             else:
                 mode, recs, b_written, segs, recov = "N/A", "0", "0 B", "0", self.dim("DISABLED")
 
-            row = f"  {n.node_id:<16} {mode:<14} {recs:<14} {b_written:<14} {segs:<12} {recov:<27}"
+            row = f"  {self._get_node_id_str(n):<16} {mode:<14} {recs:<14} {b_written:<14} {segs:<12} {recov:<27}"
             lines.append(f"║{row}║")
 
         # Footer Box
