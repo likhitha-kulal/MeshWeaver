@@ -36,3 +36,6 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Mesh Data
+.mesh_data/
