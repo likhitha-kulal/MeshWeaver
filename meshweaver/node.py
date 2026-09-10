@@ -227,7 +227,17 @@ class MeshNode:
         """Start UDP and TCP servers for the node."""
         loop = asyncio.get_running_loop()
 
-        # 1. Start TCP Task Server
+        # 1. Start Persistent WAL Engine & Run Crash Recovery
+        await self.wal_engine.start()
+        replayed, errors, last_seq = CrashRecoveryManager.recover(
+            wal_engine=self.wal_engine,
+            state_machine=self.state_machine,
+            raft_log=self.raft_log,
+        )
+        if replayed > 0:
+            logger.info(f"Node recovered {replayed} state records from disk WAL (last_seq={last_seq})")
+
+        # 2. Start TCP Task Server
         self.tcp_server = TCPTaskServer(
             node_id=self.node_id,
             host=self.host,
@@ -236,7 +246,7 @@ class MeshNode:
         await self.tcp_server.start()
         self.bound_tcp_port = self.tcp_server.port
 
-        # 2. Start UDP Protocol Endpoint
+        # 3. Start UDP Protocol Endpoint
         self.gossip_manager.set_send_callback(
             lambda host, port, payload: self.udp_protocol.send_gossip(host, port, payload)
             if self.udp_protocol is not None else None
@@ -264,6 +274,10 @@ class MeshNode:
             raft_response_handler=_on_raft_response,
             raft_snapshot_handler=self.raft_replication.handle_install_snapshot_request,
             raft_snapshot_response_handler=_on_raft_response,
+            tx_prepare_handler=self._handle_tx_prepare,
+            tx_commit_handler=self._handle_tx_commit,
+            tx_abort_handler=self._handle_tx_abort,
+            barrier_sync_handler=self._handle_barrier_sync,
         )
         transport, protocol = await loop.create_datagram_endpoint(
             udp_factory,
@@ -293,6 +307,83 @@ class MeshNode:
             f"=============================="
         )
 
+    def _handle_tx_prepare(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        tx_data = msg.payload.get("tx") or {}
+        tx_record = TxRecord.from_dict(tx_data) if tx_data else None
+        if tx_record:
+            self.transaction_coordinator._active_txs[tx_record.tx_id] = tx_record
+            fencing_tokens: Dict[str, int] = {}
+            for key in tx_record.write_set.keys():
+                self.transaction_coordinator._token_counter += 1
+                fencing_tokens[key] = self.transaction_coordinator._token_counter
+                self.transaction_coordinator._key_locks[key] = tx_record.tx_id
+            return Message(
+                msg_id=msg.msg_id,
+                type=MessageType.TX_PREPARE_RESPONSE,
+                sender_id=self.node_id.hex(),
+                sender_udp_port=self.bound_udp_port,
+                payload={"tx_id": tx_record.tx_id, "vote_yes": True, "fencing_tokens": fencing_tokens},
+            )
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.TX_PREPARE_RESPONSE,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.bound_udp_port,
+            payload={"tx_id": msg.payload.get("tx_id", ""), "vote_yes": False, "error_message": "Invalid tx payload"},
+        )
+
+    def _handle_tx_commit(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        tx_id = msg.payload.get("tx_id", "")
+        tx = self.transaction_coordinator.get_transaction(tx_id)
+        if tx:
+            for op in tx.operations:
+                if op.op_type == TxOperationType.SET:
+                    self.state_machine._state[op.key] = op.value
+                elif op.op_type == TxOperationType.INCREMENT:
+                    curr = self.state_machine.get(op.key, 0)
+                    self.state_machine._state[op.key] = int(curr) + op.delta
+                elif op.op_type == TxOperationType.DELETE:
+                    self.state_machine._state.pop(op.key, None)
+            for key in tx.write_set.keys():
+                self.transaction_coordinator._key_locks.pop(key, None)
+            tx.status = TxStatus.COMMITTED
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.TX_COMMIT_RESPONSE,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.bound_udp_port,
+            payload={"tx_id": tx_id, "committed": True},
+        )
+
+    def _handle_tx_abort(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        tx_id = msg.payload.get("tx_id", "")
+        tx = self.transaction_coordinator.get_transaction(tx_id)
+        if tx:
+            for key in tx.write_set.keys():
+                self.transaction_coordinator._key_locks.pop(key, None)
+            tx.status = TxStatus.ABORTED
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.TX_ABORT_RESPONSE,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.bound_udp_port,
+            payload={"tx_id": tx_id, "aborted": True},
+        )
+
+    def _handle_barrier_sync(self, msg: Message, addr: Tuple[str, int]) -> Optional[Message]:
+        barrier_id = msg.payload.get("barrier_id", "")
+        party_id = msg.payload.get("party_id", "")
+        threshold = int(msg.payload.get("threshold", 2))
+        barrier = self.synchronization_manager.get_or_create_barrier(barrier_id, threshold=threshold)
+        asyncio.create_task(barrier.enter(party_id))
+        return Message(
+            msg_id=msg.msg_id,
+            type=MessageType.BARRIER_SYNC_RESPONSE,
+            sender_id=self.node_id.hex(),
+            sender_udp_port=self.bound_udp_port,
+            payload={"barrier_id": barrier_id, "entered": True},
+        )
+
     async def stop(self) -> None:
         """Gracefully shut down all node networking and background services."""
         if self.consensus_orchestrator:
@@ -300,6 +391,9 @@ class MeshNode:
 
         if self.gossip_manager:
             await self.gossip_manager.stop()
+
+        if self.wal_engine:
+            await self.wal_engine.stop()
 
         if self.tcp_server:
             await self.tcp_server.stop()
