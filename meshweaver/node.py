@@ -1024,13 +1024,68 @@ async def cli_main() -> None:
     parser.add_argument("--priority-workers", type=int, default=5, help="Worker concurrency limit for priority queue")
     parser.add_argument("--orchestrator-demo", action="store_true", help="Run consensus job orchestration demo")
     parser.add_argument("--snapshot-demo", action="store_true", help="Run Raft log snapshot compaction demo")
+    parser.add_argument("--chaos-mode", action="store_true", help="Enable Chaos Engineering fault injection on node")
+    parser.add_argument("--chaos-drop-rate", type=float, default=0.0, help="Packet drop rate (0.0 to 1.0) for chaos mode")
+    parser.add_argument("--chaos-latency-ms", type=float, default=0.0, help="Artificial latency in ms for chaos mode")
+    parser.add_argument("--cluster-supervisor", action="store_true", help="Run multi-node local cluster supervisor")
+    parser.add_argument("--cluster-nodes", type=int, default=3, help="Number of nodes to spawn with cluster supervisor")
+    parser.add_argument(
+        "--cluster-topology",
+        type=str,
+        default="full_mesh",
+        choices=["full_mesh", "ring", "star", "linear"],
+        help="Cluster network topology",
+    )
 
     args = parser.parse_args()
+
+    if args.cluster_supervisor:
+        from meshweaver.cluster_runner import LocalClusterRunner
+        from meshweaver.models import ClusterConfig, ClusterTopology
+
+        topo_map = {
+            "full_mesh": ClusterTopology.FULL_MESH,
+            "ring": ClusterTopology.RING,
+            "star": ClusterTopology.STAR,
+            "linear": ClusterTopology.LINEAR,
+        }
+        c_cfg = ClusterConfig(
+            cluster_name=f"MeshWeaver-{args.cluster_nodes}Node-Cluster",
+            node_count=args.cluster_nodes,
+            topology=topo_map.get(args.cluster_topology, ClusterTopology.FULL_MESH),
+            host=args.host,
+            base_udp_port=args.port,
+            base_tcp_port=args.port + 1,
+            enable_chaos=args.chaos_mode,
+        )
+        runner = LocalClusterRunner(c_cfg)
+        logger.info(f"Starting LocalClusterRunner with {args.cluster_nodes} nodes...")
+        await runner.start()
+        print("\n" + runner.format_status_table() + "\n")
+        logger.info("Cluster Supervisor running. Press Ctrl+C to shutdown.")
+        try:
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            logger.info("Cluster supervisor shutting down...")
+        finally:
+            await runner.stop()
+        return
+
+    chaos_cfg = None
+    if args.chaos_mode or args.chaos_drop_rate > 0 or args.chaos_latency_ms > 0:
+        from meshweaver.models import ChaosConfig
+        chaos_cfg = ChaosConfig(
+            enabled=True,
+            packet_loss_rate=args.chaos_drop_rate,
+            min_latency_ms=args.chaos_latency_ms,
+            max_latency_ms=args.chaos_latency_ms * 1.5 if args.chaos_latency_ms > 0 else 0.0,
+        )
 
     node = MeshNode(
         host=args.host,
         udp_port=args.port,
         tcp_port=args.tcp_port,
+        chaos_config=chaos_cfg,
     )
 
     await node.start()
