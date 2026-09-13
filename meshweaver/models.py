@@ -1304,3 +1304,104 @@ class ChaosConfig:
             isolated_nodes=set(data.get("isolated_nodes", [])),
         )
 
+
+class NodeLifecycleState(str, Enum):
+    """Lifecycle states of a supervised mesh node."""
+    STOPPED = "STOPPED"
+    STARTING = "STARTING"
+    HEALTHY = "HEALTHY"
+    DEGRADED = "DEGRADED"
+    CRASHED = "CRASHED"
+
+
+class ClusterTopology(str, Enum):
+    """Network connection topologies for automated cluster bootstrapping."""
+    FULL_MESH = "FULL_MESH"
+    RING = "RING"
+    STAR = "STAR"
+    LINEAR = "LINEAR"
+
+
+@dataclass
+class NodeProcess:
+    """Telemetry and execution metadata for a supervised MeshNode instance."""
+    name: str
+    node_id: str
+    host: str
+    udp_port: int
+    tcp_port: int
+    state: NodeLifecycleState = NodeLifecycleState.STARTING
+    uptime_seconds: float = 0.0
+    restart_count: int = 0
+    is_leader: bool = False
+    cpu_percent: float = 0.0
+    ram_percent: float = 0.0
+    last_heartbeat: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "node_id": self.node_id,
+            "host": self.host,
+            "udp_port": self.udp_port,
+            "tcp_port": self.tcp_port,
+            "state": self.state.value if isinstance(self.state, NodeLifecycleState) else str(self.state),
+            "uptime_seconds": self.uptime_seconds,
+            "restart_count": self.restart_count,
+            "is_leader": self.is_leader,
+            "cpu_percent": self.cpu_percent,
+            "ram_percent": self.ram_percent,
+            "last_heartbeat": self.last_heartbeat,
+        }
+
+
+@dataclass
+class ClusterConfig:
+    """Configuration for local multi-node cluster supervisor and runner."""
+    cluster_name: str = "MeshWeaver-Cluster"
+    node_count: int = 3
+    topology: ClusterTopology = ClusterTopology.FULL_MESH
+    host: str = "127.0.0.1"
+    base_udp_port: int = 0      # 0 for dynamic ephemeral port allocation
+    base_tcp_port: int = 0      # 0 for dynamic ephemeral port allocation
+    auto_bootstrap: bool = True
+    enable_wal: bool = True
+    enable_consensus: bool = True
+    enable_chaos: bool = False
+    data_dir: str = ".mesh_data"
+    health_check_interval_seconds: float = 0.5
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "cluster_name": self.cluster_name,
+            "node_count": self.node_count,
+            "topology": self.topology.value if isinstance(self.topology, ClusterTopology) else str(self.topology),
+            "host": self.host,
+            "base_udp_port": self.base_udp_port,
+            "base_tcp_port": self.base_tcp_port,
+            "auto_bootstrap": self.auto_bootstrap,
+            "enable_wal": self.enable_wal,
+            "enable_consensus": self.enable_consensus,
+            "enable_chaos": self.enable_chaos,
+            "data_dir": self.data_dir,
+            "health_check_interval_seconds": self.health_check_interval_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ClusterConfig":
+        return cls(
+            cluster_name=data.get("cluster_name", "MeshWeaver-Cluster"),
+            node_count=int(data.get("node_count", 3)),
+            topology=ClusterTopology(data.get("topology", ClusterTopology.FULL_MESH.value)),
+            host=data.get("host", "127.0.0.1"),
+            base_udp_port=int(data.get("base_udp_port", 0)),
+            base_tcp_port=int(data.get("base_tcp_port", 0)),
+            auto_bootstrap=bool(data.get("auto_bootstrap", True)),
+            enable_wal=bool(data.get("enable_wal", True)),
+            enable_consensus=bool(data.get("enable_consensus", True)),
+            enable_chaos=bool(data.get("enable_chaos", False)),
+            data_dir=data.get("data_dir", ".mesh_data"),
+            health_check_interval_seconds=float(data.get("health_check_interval_seconds", 0.5)),
+        )
+
+
