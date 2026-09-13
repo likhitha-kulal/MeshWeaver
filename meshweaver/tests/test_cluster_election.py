@@ -11,9 +11,9 @@ from meshweaver.node import MeshNode
 
 class TestClusterElectionIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_three_node_cluster_leader_election(self):
-        node1 = MeshNode(host="127.0.0.1", udp_port=19200, tcp_port=19201)
-        node2 = MeshNode(host="127.0.0.1", udp_port=19210, tcp_port=19211)
-        node3 = MeshNode(host="127.0.0.1", udp_port=19220, tcp_port=19221)
+        node1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        node2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        node3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
         
         nodes = [node1, node2, node3]
         for n in nodes:
@@ -24,9 +24,9 @@ class TestClusterElectionIntegration(unittest.IsolatedAsyncioTestCase):
 
         try:
             # Connect all nodes to each other
-            await node2.bootstrap([("127.0.0.1", 19200)])
-            await node3.bootstrap([("127.0.0.1", 19200)])
-            await node1.bootstrap([("127.0.0.1", 19210)])
+            await node2.bootstrap([("127.0.0.1", node1.bound_udp_port)])
+            await node3.bootstrap([("127.0.0.1", node1.bound_udp_port)])
+            await node1.bootstrap([("127.0.0.1", node2.bound_udp_port)])
             await asyncio.sleep(0.15)
 
             await node1.trigger_election()
@@ -44,8 +44,8 @@ class TestClusterElectionIntegration(unittest.IsolatedAsyncioTestCase):
                 await n.stop()
 
     async def test_cluster_leader_failover(self):
-        node1 = MeshNode(host="127.0.0.1", udp_port=19300, tcp_port=19301)
-        node2 = MeshNode(host="127.0.0.1", udp_port=19310, tcp_port=19311)
+        node1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        node2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
         
         nodes = [node1, node2]
         for n in nodes:
@@ -55,8 +55,8 @@ class TestClusterElectionIntegration(unittest.IsolatedAsyncioTestCase):
             n.leader_election.config.heartbeat_interval = 0.040
 
         try:
-            await node2.bootstrap([("127.0.0.1", 19300)])
-            await node1.bootstrap([("127.0.0.1", 19310)])
+            await node2.bootstrap([("127.0.0.1", node1.bound_udp_port)])
+            await node1.bootstrap([("127.0.0.1", node2.bound_udp_port)])
             await asyncio.sleep(0.1)
 
             await node1.trigger_election()

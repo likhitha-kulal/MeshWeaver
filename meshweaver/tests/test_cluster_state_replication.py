@@ -11,10 +11,10 @@ from meshweaver.node import MeshNode
 
 class TestClusterStateReplicationIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_cluster_state_replication_and_distributed_lock(self):
-        # Spin up 3-node cluster on isolated test ports
-        n1 = MeshNode(host="127.0.0.1", udp_port=19600, tcp_port=19601)
-        n2 = MeshNode(host="127.0.0.1", udp_port=19610, tcp_port=19611)
-        n3 = MeshNode(host="127.0.0.1", udp_port=19620, tcp_port=19621)
+        # Spin up 3-node cluster on isolated dynamic test ports
+        n1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        n2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        n3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
 
         nodes = [n1, n2, n3]
         for n in nodes:
@@ -25,9 +25,9 @@ class TestClusterStateReplicationIntegration(unittest.IsolatedAsyncioTestCase):
 
         try:
             # Bootstrap cluster
-            await n2.bootstrap([("127.0.0.1", 19600)])
-            await n3.bootstrap([("127.0.0.1", 19600)])
-            await n1.bootstrap([("127.0.0.1", 19610)])
+            await n2.bootstrap([("127.0.0.1", n1.bound_udp_port)])
+            await n3.bootstrap([("127.0.0.1", n1.bound_udp_port)])
+            await n1.bootstrap([("127.0.0.1", n2.bound_udp_port)])
             await asyncio.sleep(0.15)
 
             # Elect n1 as leader

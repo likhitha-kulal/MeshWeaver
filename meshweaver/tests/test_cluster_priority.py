@@ -29,10 +29,10 @@ class TestClusterPriorityIntegration(unittest.IsolatedAsyncioTestCase):
     """End-to-End cluster integration tests for Priority QoS Scheduler."""
 
     async def asyncSetUp(self):
-        # Create a 3-node cluster
-        self.node1 = MeshNode(host="127.0.0.1", udp_port=20400)
-        self.node2 = MeshNode(host="127.0.0.1", udp_port=20402)
-        self.node3 = MeshNode(host="127.0.0.1", udp_port=20404)
+        # Create a 3-node cluster with dynamic ephemeral ports
+        self.node1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        self.node2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        self.node3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
 
         await self.node1.start()
         await self.node2.start()

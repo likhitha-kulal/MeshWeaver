@@ -34,9 +34,9 @@ class TestClusterCircuitBreakerIntegration(unittest.IsolatedAsyncioTestCase):
             half_open_success_threshold=2,
         )
 
-        self.node1 = MeshNode(host="127.0.0.1", udp_port=20200, circuit_breaker_config=cb_cfg)
-        self.node2 = MeshNode(host="127.0.0.1", udp_port=20202, circuit_breaker_config=cb_cfg)
-        self.node3 = MeshNode(host="127.0.0.1", udp_port=20204, circuit_breaker_config=cb_cfg)
+        self.node1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, circuit_breaker_config=cb_cfg)
+        self.node2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, circuit_breaker_config=cb_cfg)
+        self.node3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, circuit_breaker_config=cb_cfg)
 
         await self.node1.start()
         await self.node2.start()

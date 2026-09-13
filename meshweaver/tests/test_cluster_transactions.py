@@ -23,9 +23,9 @@ class TestClusterTransactionsIntegration(unittest.IsolatedAsyncioTestCase):
         cfg2 = StorageConfig(data_dir=self.temp_dir, node_storage_id="node2")
         cfg3 = StorageConfig(data_dir=self.temp_dir, node_storage_id="node3")
 
-        n1 = MeshNode(host="127.0.0.1", udp_port=19800, tcp_port=19801, storage_config=cfg1)
-        n2 = MeshNode(host="127.0.0.1", udp_port=19810, tcp_port=19811, storage_config=cfg2)
-        n3 = MeshNode(host="127.0.0.1", udp_port=19820, tcp_port=19821, storage_config=cfg3)
+        n1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg1)
+        n2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg2)
+        n3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg3)
 
         nodes = [n1, n2, n3]
         for n in nodes:
@@ -33,8 +33,8 @@ class TestClusterTransactionsIntegration(unittest.IsolatedAsyncioTestCase):
 
         try:
             # Bootstrap cluster
-            await n2.bootstrap([("127.0.0.1", 19800)])
-            await n3.bootstrap([("127.0.0.1", 19800)])
+            await n2.bootstrap([("127.0.0.1", n1.bound_udp_port)])
+            await n3.bootstrap([("127.0.0.1", n1.bound_udp_port)])
             await asyncio.sleep(0.15)
 
             # 1. Execute distributed 2PC transaction on node 1

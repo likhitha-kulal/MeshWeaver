@@ -44,10 +44,10 @@ class TestClusterPipelineIntegration(unittest.IsolatedAsyncioTestCase):
     """End-to-End cluster integration tests for MapReduce and Task Pipelines."""
 
     async def asyncSetUp(self):
-        # Create 3-node mesh cluster
-        self.node1 = MeshNode(host="127.0.0.1", udp_port=20300)
-        self.node2 = MeshNode(host="127.0.0.1", udp_port=20302)
-        self.node3 = MeshNode(host="127.0.0.1", udp_port=20304)
+        # Create 3-node mesh cluster with dynamic ports
+        self.node1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        self.node2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        self.node3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
 
         await self.node1.start()
         await self.node2.start()

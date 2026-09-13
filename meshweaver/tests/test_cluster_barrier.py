@@ -11,9 +11,9 @@ from meshweaver.node import MeshNode
 
 class TestClusterBarrierIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_multi_node_distributed_barrier_and_semaphore(self):
-        n1 = MeshNode(host="127.0.0.1", udp_port=19900, tcp_port=19901)
-        n2 = MeshNode(host="127.0.0.1", udp_port=19910, tcp_port=19911)
-        n3 = MeshNode(host="127.0.0.1", udp_port=19920, tcp_port=19921)
+        n1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        n2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        n3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
 
         nodes = [n1, n2, n3]
         for n in nodes:
@@ -21,8 +21,8 @@ class TestClusterBarrierIntegration(unittest.IsolatedAsyncioTestCase):
 
         try:
             # Bootstrap cluster
-            await n2.bootstrap([("127.0.0.1", 19900)])
-            await n3.bootstrap([("127.0.0.1", 19900)])
+            await n2.bootstrap([("127.0.0.1", n1.bound_udp_port)])
+            await n3.bootstrap([("127.0.0.1", n1.bound_udp_port)])
             await asyncio.sleep(0.15)
 
             # 1. Distributed Rendezvous Barrier

@@ -28,8 +28,8 @@ class TestClusterCrashRecoveryIntegration(unittest.IsolatedAsyncioTestCase):
         # 1. Start original node and commit state mutations
         node1 = MeshNode(
             host="127.0.0.1",
-            udp_port=19850,
-            tcp_port=19851,
+            udp_port=0,
+            tcp_port=0,
             storage_config=storage_cfg,
         )
         await node1.start()
@@ -52,8 +52,8 @@ class TestClusterCrashRecoveryIntegration(unittest.IsolatedAsyncioTestCase):
         # 3. Reboot: Instantiate brand new MeshNode pointing to exact same disk directory
         node1_rebooted = MeshNode(
             host="127.0.0.1",
-            udp_port=19860,
-            tcp_port=19861,
+            udp_port=0,
+            tcp_port=0,
             storage_config=storage_cfg,
         )
         await node1_rebooted.start()

@@ -15,10 +15,10 @@ def task_cube(x: int) -> int:
 
 class TestClusterOrchestratorIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_multi_node_consensus_job_orchestration(self):
-        # Spin up 3-node cluster
-        n1 = MeshNode(host="127.0.0.1", udp_port=19700, tcp_port=19701)
-        n2 = MeshNode(host="127.0.0.1", udp_port=19710, tcp_port=19711)
-        n3 = MeshNode(host="127.0.0.1", udp_port=19720, tcp_port=19721)
+        # Spin up 3-node cluster with dynamic ephemeral ports
+        n1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        n2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
+        n3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0)
 
         nodes = [n1, n2, n3]
         for n in nodes:
@@ -29,9 +29,9 @@ class TestClusterOrchestratorIntegration(unittest.IsolatedAsyncioTestCase):
 
         try:
             # Bootstrap cluster
-            await n2.bootstrap([("127.0.0.1", 19700)])
-            await n3.bootstrap([("127.0.0.1", 19700)])
-            await n1.bootstrap([("127.0.0.1", 19710)])
+            await n2.bootstrap([("127.0.0.1", n1.bound_udp_port)])
+            await n3.bootstrap([("127.0.0.1", n1.bound_udp_port)])
+            await n1.bootstrap([("127.0.0.1", n2.bound_udp_port)])
             await asyncio.sleep(0.15)
 
             # Elect leader
