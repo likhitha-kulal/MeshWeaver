@@ -41,6 +41,7 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         tx_commit_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
         tx_abort_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
         barrier_sync_handler: Optional[Callable[[Message, Tuple[str, int]], Optional[Message]]] = None,
+        chaos_engine: Optional[Any] = None,
     ):
         self.node_id = node_id
         self.tcp_port = tcp_port
@@ -57,6 +58,7 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         self.tx_commit_handler = tx_commit_handler
         self.tx_abort_handler = tx_abort_handler
         self.barrier_sync_handler = barrier_sync_handler
+        self.chaos_engine = chaos_engine
         self.transport: Optional[asyncio.DatagramTransport] = None
         self._pending_requests: Dict[str, asyncio.Future[Message]] = {}
         self.local_udp_port: int = 0
@@ -74,6 +76,15 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         try:
             json_str = data.decode("utf-8")
             msg = Message.from_json(json_str)
+
+            if self.chaos_engine and self.chaos_engine.is_enabled():
+                processed_msg, _, should_drop = self.chaos_engine.evaluate_packet(
+                    msg, sender_id=msg.sender_id, recipient_id=self.node_id.hex()
+                )
+                if should_drop or processed_msg is None:
+                    return
+                msg = processed_msg
+
             logger.debug(f"[UDP RECV] {msg.type} from {addr[0]}:{addr[1]}")
 
             # Refresh sender contact in routing table
@@ -289,12 +300,31 @@ class UDPNodeProtocol(asyncio.DatagramProtocol):
         )
         self.send_datagram(response_msg, addr[0], addr[1])
 
-    def send_datagram(self, msg: Message, target_ip: str, target_port: int) -> None:
-        """Send serialized JSON datagram to remote peer."""
+    def send_datagram(self, msg: Message, target_ip: str, target_port: int, recipient_id: Optional[str] = None) -> None:
+        """Send serialized JSON datagram to remote peer with chaos interception."""
         if not self.transport:
             raise RuntimeError("UDP transport is inactive")
-        payload_bytes = msg.to_json().encode("utf-8")
-        self.transport.sendto(payload_bytes, (target_ip, target_port))
+        if self.chaos_engine and self.chaos_engine.is_enabled():
+            processed_msg, delay_sec, should_drop = self.chaos_engine.evaluate_packet(
+                msg, sender_id=self.node_id.hex(), recipient_id=recipient_id
+            )
+            if should_drop or processed_msg is None:
+                return
+            msg = processed_msg
+            if delay_sec > 0:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.call_later(delay_sec, self._raw_send, msg, target_ip, target_port)
+                    return
+                except Exception:
+                    pass
+        self._raw_send(msg, target_ip, target_port)
+
+    def _raw_send(self, msg: Message, target_ip: str, target_port: int) -> None:
+        """Internal unintercepted transmission of byte payload."""
+        if self.transport and not self.transport.is_closing():
+            payload_bytes = msg.to_json().encode("utf-8")
+            self.transport.sendto(payload_bytes, (target_ip, target_port))
 
     def send_gossip(self, target_ip: str, target_port: int, payload: Dict[str, object]) -> None:
         """Send gossip packet to target peer."""

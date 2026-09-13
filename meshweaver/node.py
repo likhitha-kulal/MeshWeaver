@@ -33,11 +33,13 @@ from meshweaver.models import (
     AppendEntriesRequest,
     AppendEntriesResponse,
     BackpressureStatus,
+    ChaosConfig,
     ConsensusJob,
     ConsensusJobStatus,
     DistributedBarrierSpec,
     DistributedLock,
     DistributedSemaphoreSpec,
+    FaultType,
     InstallSnapshotRequest,
     InstallSnapshotResponse,
     LoadShedderMetrics,
@@ -45,6 +47,7 @@ from meshweaver.models import (
     LogEntry,
     Message,
     MessageType,
+    NetworkPartition,
     NodeID,
     NodeInfo,
     RaftCommandType,
@@ -54,6 +57,7 @@ from meshweaver.models import (
     TxRecord,
     TxStatus,
 )
+from meshweaver.chaos import ChaosEngine, ChaosMetrics, LatencyJitterInjector, PacketDropRule
 from meshweaver.consensus_orchestrator import ConsensusJobOrchestrator, OrchestratorMetrics
 from meshweaver.map_reduce import DistributedMapReduce, MapReduceMetrics
 from meshweaver.networking import TCPTaskClient, TCPTaskServer, UDPNodeProtocol
@@ -102,11 +106,13 @@ class MeshNode:
         election_config: Optional[ElectionConfig] = None,
         storage_config: Optional[StorageConfig] = None,
         token_bucket_config: Optional[TokenBucketConfig] = None,
+        chaos_config: Optional[ChaosConfig] = None,
     ):
         self.host = host
         self.requested_udp_port = udp_port
         self.requested_tcp_port = tcp_port
         self.node_id = node_id if node_id is not None else NodeID()
+        self.chaos_engine = ChaosEngine(self.node_id.hex(), config=chaos_config)
 
         self.bound_udp_port: int = 0
         self.bound_tcp_port: int = 0
@@ -285,6 +291,7 @@ class MeshNode:
             tx_commit_handler=self._handle_tx_commit,
             tx_abort_handler=self._handle_tx_abort,
             barrier_sync_handler=self._handle_barrier_sync,
+            chaos_engine=self.chaos_engine,
         )
         transport, protocol = await loop.create_datagram_endpoint(
             udp_factory,
@@ -628,6 +635,43 @@ class MeshNode:
             "barriers": [b.to_dict() for b in self.synchronization_manager.get_all_barrier_specs()],
             "semaphores": [s.to_dict() for s in self.synchronization_manager.get_all_semaphore_specs()],
         }
+
+    # --- Week 4 Day 5: Chaos Engineering & Reliability Simulation APIs ---
+
+    def inject_latency(self, min_ms: float, max_ms: float, jitter_ms: float = 0.0) -> None:
+        """Configure artificial network latency and jitter on this node."""
+        self.chaos_engine.set_latency(min_ms, max_ms, jitter_ms)
+
+    def set_packet_loss(self, loss_rate: float) -> None:
+        """Configure synthetic random packet drop rate (0.0 to 1.0)."""
+        self.chaos_engine.set_packet_loss(loss_rate)
+
+    def create_partition(
+        self,
+        partition_id: str,
+        group_a: Set[str],
+        group_b: Set[str],
+        bidirectional: bool = True,
+    ) -> NetworkPartition:
+        """Create a simulated network partition between two subsets of cluster nodes."""
+        return self.chaos_engine.create_partition(
+            partition_id=partition_id,
+            group_a=group_a,
+            group_b=group_b,
+            bidirectional=bidirectional,
+        )
+
+    def isolate_from_cluster(self) -> NetworkPartition:
+        """Completely isolate this node from all incoming and outgoing cluster communications."""
+        return self.chaos_engine.isolate_node(self.node_id.hex())
+
+    def heal_chaos(self) -> None:
+        """Heal all active network partitions, drop rules, and latency injectors."""
+        self.chaos_engine.heal_all()
+
+    def get_chaos_metrics(self) -> Dict[str, Any]:
+        """Retrieve live telemetry from the node's ChaosEngine."""
+        return self.chaos_engine.get_metrics().to_dict()
 
     # --- DHT and Networking APIs ---
 
