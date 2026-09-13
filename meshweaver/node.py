@@ -534,7 +534,6 @@ class MeshNode:
         """Retrieve real-time consensus orchestrator metrics snapshot."""
         return self.consensus_orchestrator.get_orchestrator_metrics()
 
-<<<<<<< HEAD
     # --- Week 4 Day 4: 2PC Distributed Transactions & Synchronization APIs ---
 
     async def begin_transaction(
