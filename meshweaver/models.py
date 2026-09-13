@@ -1210,3 +1210,97 @@ class LoadShedderMetrics:
             max_concurrency=int(data.get("max_concurrency", 16)),
         )
 
+
+# =====================================================================
+# Week 4 Day 5: Chaos Engineering & Cluster Orchestration Models
+# =====================================================================
+
+class FaultType(str, Enum):
+    """Types of synthetic faults injected by the Chaos Engine."""
+    PACKET_DROP = "PACKET_DROP"
+    LATENCY_JITTER = "LATENCY_JITTER"
+    NETWORK_PARTITION = "NETWORK_PARTITION"
+    BYZANTINE_PAYLOAD = "BYZANTINE_PAYLOAD"
+    NODE_CRASH = "NODE_CRASH"
+    FLAKY_RPC = "FLAKY_RPC"
+
+
+@dataclass
+class NetworkPartition:
+    """
+    Representation of a simulated network partition split between cluster subsets.
+    Messages between nodes in group_a and group_b are dropped or rejected.
+    """
+    partition_id: str
+    group_a: Set[str] = field(default_factory=set)
+    group_b: Set[str] = field(default_factory=set)
+    bidirectional: bool = True
+    created_at: float = field(default_factory=time.time)
+    is_active: bool = True
+
+    def should_drop(self, sender_id: str, recipient_id: str) -> bool:
+        """Evaluate whether a message between sender and recipient crosses the active partition."""
+        if not self.is_active:
+            return False
+        if sender_id in self.group_a and recipient_id in self.group_b:
+            return True
+        if self.bidirectional and sender_id in self.group_b and recipient_id in self.group_a:
+            return True
+        return False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "partition_id": self.partition_id,
+            "group_a": list(self.group_a),
+            "group_b": list(self.group_b),
+            "bidirectional": self.bidirectional,
+            "created_at": self.created_at,
+            "is_active": self.is_active,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "NetworkPartition":
+        return cls(
+            partition_id=data.get("partition_id", ""),
+            group_a=set(data.get("group_a", [])),
+            group_b=set(data.get("group_b", [])),
+            bidirectional=bool(data.get("bidirectional", True)),
+            created_at=float(data.get("created_at", time.time())),
+            is_active=bool(data.get("is_active", True)),
+        )
+
+
+@dataclass
+class ChaosConfig:
+    """Configuration for synthetic network fault injection, latency jitter, and partitioning."""
+    enabled: bool = False
+    packet_loss_rate: float = 0.0          # 0.0 to 1.0 probability of dropping UDP packet
+    min_latency_ms: float = 0.0            # Minimum artificial injected latency in milliseconds
+    max_latency_ms: float = 0.0            # Maximum artificial injected latency in milliseconds
+    byzantine_corruption_rate: float = 0.0 # Probability of corrupting packet bytes / payload
+    flaky_rpc_rate: float = 0.0            # Probability of returning synthetic timeout / connection reset
+    isolated_nodes: Set[str] = field(default_factory=set) # Nodes totally isolated from all traffic
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "packet_loss_rate": self.packet_loss_rate,
+            "min_latency_ms": self.min_latency_ms,
+            "max_latency_ms": self.max_latency_ms,
+            "byzantine_corruption_rate": self.byzantine_corruption_rate,
+            "flaky_rpc_rate": self.flaky_rpc_rate,
+            "isolated_nodes": list(self.isolated_nodes),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ChaosConfig":
+        return cls(
+            enabled=bool(data.get("enabled", False)),
+            packet_loss_rate=float(data.get("packet_loss_rate", 0.0)),
+            min_latency_ms=float(data.get("min_latency_ms", 0.0)),
+            max_latency_ms=float(data.get("max_latency_ms", 0.0)),
+            byzantine_corruption_rate=float(data.get("byzantine_corruption_rate", 0.0)),
+            flaky_rpc_rate=float(data.get("flaky_rpc_rate", 0.0)),
+            isolated_nodes=set(data.get("isolated_nodes", [])),
+        )
+
