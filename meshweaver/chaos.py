@@ -126,3 +126,137 @@ class LatencyJitterInjector:
         if delay > 0.0:
             await asyncio.sleep(delay)
         return delay * 1000.0
+
+
+class ChaosEngine:
+    """
+    Central Chaos & Reliability Engineering subsystem.
+    Hooks directly into the Node networking layer to intercept, delay, drop, or corrupt
+    datagrams and simulate complex multi-node failure scenarios.
+    """
+
+    def __init__(
+        self,
+        node_id: str,
+        config: Optional[ChaosConfig] = None,
+    ):
+        self.node_id = node_id
+        self.config = config if config is not None else ChaosConfig()
+        self.metrics = ChaosMetrics()
+        self.partitions: Dict[str, NetworkPartition] = {}
+        self.drop_rules: Dict[str, PacketDropRule] = {}
+        self.latency_injector = LatencyJitterInjector(
+            min_latency_ms=self.config.min_latency_ms,
+            max_latency_ms=self.config.max_latency_ms,
+        )
+        self._byzantine_callbacks: List[Callable[[Message], Message]] = []
+
+    def enable(self) -> None:
+        """Enable chaos fault injection."""
+        self.config.enabled = True
+
+    def disable(self) -> None:
+        """Disable chaos fault injection."""
+        self.config.enabled = False
+
+    def is_enabled(self) -> bool:
+        return self.config.enabled
+
+    # --- Network Partitioning & Split-Brain Mechanics ---
+
+    def create_partition(
+        self,
+        partition_id: str,
+        group_a: Set[str],
+        group_b: Set[str],
+        bidirectional: bool = True,
+    ) -> NetworkPartition:
+        """
+        Create a simulated network partition between two groups of nodes.
+        Any message crossing group_a <-> group_b will be dropped.
+        """
+        partition = NetworkPartition(
+            partition_id=partition_id,
+            group_a=group_a,
+            group_b=group_b,
+            bidirectional=bidirectional,
+        )
+        self.partitions[partition_id] = partition
+        self.metrics.active_partitions_count = len([p for p in self.partitions.values() if p.is_active])
+        self.config.enabled = True
+        logger.warning(
+            f"[CHAOS PARTITION] Created partition '{partition_id}' between "
+            f"Group A ({len(group_a)} nodes) and Group B ({len(group_b)} nodes)"
+        )
+        return partition
+
+    def isolate_node(self, target_node_id: str) -> NetworkPartition:
+        """Completely isolate a target node from all other cluster members (island mode)."""
+        self.config.isolated_nodes.add(target_node_id)
+        partition_id = f"isolate_{target_node_id[:8]}"
+        partition = NetworkPartition(
+            partition_id=partition_id,
+            group_a={target_node_id},
+            group_b=set(),  # Checked specially in is_partitioned
+            bidirectional=True,
+        )
+        self.partitions[partition_id] = partition
+        self.metrics.active_partitions_count = len([p for p in self.partitions.values() if p.is_active])
+        self.config.enabled = True
+        logger.warning(f"[CHAOS ISOLATION] Isolated node {target_node_id} from cluster")
+        return partition
+
+    def heal_partition(self, partition_id: str) -> bool:
+        """Remove a specific partition rule and restore connectivity."""
+        if partition_id in self.partitions:
+            part = self.partitions.pop(partition_id)
+            part.is_active = False
+            self.metrics.active_partitions_count = len([p for p in self.partitions.values() if p.is_active])
+            logger.info(f"[CHAOS HEAL] Healed network partition '{partition_id}'")
+            return True
+        return False
+
+    def heal_all(self) -> None:
+        """Heal all active network partitions, clear isolated nodes, and clear drop rules."""
+        self.partitions.clear()
+        self.config.isolated_nodes.clear()
+        self.drop_rules.clear()
+        self.metrics.active_partitions_count = 0
+        logger.info("[CHAOS HEAL] All partitions and drop rules healed.")
+
+    def is_partitioned(self, sender_id: str, recipient_id: str) -> bool:
+        """Check if communication between sender and recipient is blocked by active partitions."""
+        if sender_id in self.config.isolated_nodes or recipient_id in self.config.isolated_nodes:
+            if sender_id != recipient_id:
+                return True
+
+        for partition in self.partitions.values():
+            if partition.should_drop(sender_id, recipient_id):
+                return True
+        return False
+
+    # --- Rule Management ---
+
+    def add_drop_rule(self, rule: PacketDropRule) -> None:
+        """Register a custom packet drop rule."""
+        self.drop_rules[rule.rule_id] = rule
+        self.config.enabled = True
+
+    def remove_drop_rule(self, rule_id: str) -> bool:
+        """Remove a custom packet drop rule."""
+        return self.drop_rules.pop(rule_id, None) is not None
+
+    def set_latency(self, min_ms: float, max_ms: float, jitter_ms: float = 0.0) -> None:
+        """Configure artificial latency and jitter."""
+        self.config.min_latency_ms = min_ms
+        self.config.max_latency_ms = max_ms
+        self.latency_injector = LatencyJitterInjector(min_ms, max_ms, jitter_ms)
+        if max_ms > 0:
+            self.config.enabled = True
+
+    def set_packet_loss(self, loss_rate: float) -> None:
+        """Set global random packet loss rate (0.0 to 1.0)."""
+        self.config.packet_loss_rate = max(0.0, min(1.0, loss_rate))
+        if self.config.packet_loss_rate > 0.0:
+            self.config.enabled = True
+
