@@ -101,6 +101,24 @@ from meshweaver.barrier import (
 )
 from meshweaver.adaptive_load_shedder import AdaptiveLoadShedder
 from meshweaver.dashboard import ClusterTelemetryDashboard
+from meshweaver.chaos import (
+    ChaosEngine,
+    ChaosMetrics,
+    LatencyJitterInjector,
+    PacketDropRule,
+)
+from meshweaver.cluster_runner import (
+    LocalClusterRunner,
+)
+from meshweaver.models import (
+    ChaosConfig,
+    ClusterConfig,
+    ClusterTopology,
+    FaultType,
+    NetworkPartition,
+    NodeLifecycleState,
+    NodeProcess,
+)
 
 __version__ = "0.6.0"
 
@@ -203,5 +221,17 @@ __all__ = [
     "LoadShedderMetrics",
     "AdaptiveLoadShedder",
     "ClusterTelemetryDashboard",
+    "ChaosEngine",
+    "ChaosMetrics",
+    "LatencyJitterInjector",
+    "PacketDropRule",
+    "LocalClusterRunner",
+    "ChaosConfig",
+    "ClusterConfig",
+    "ClusterTopology",
+    "FaultType",
+    "NetworkPartition",
+    "NodeLifecycleState",
+    "NodeProcess",
 ]
 
