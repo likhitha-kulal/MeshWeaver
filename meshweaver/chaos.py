@@ -260,3 +260,106 @@ class ChaosEngine:
         if self.config.packet_loss_rate > 0.0:
             self.config.enabled = True
 
+    def set_byzantine_corruption(self, corruption_rate: float) -> None:
+        """Configure probability of mutating message payloads (Byzantine fault simulation)."""
+        self.config.byzantine_corruption_rate = max(0.0, min(1.0, corruption_rate))
+        if self.config.byzantine_corruption_rate > 0.0:
+            self.config.enabled = True
+
+    def set_flaky_rpc_rate(self, flaky_rate: float) -> None:
+        """Configure probability of RPC network timeout / connection abort."""
+        self.config.flaky_rpc_rate = max(0.0, min(1.0, flaky_rate))
+        if self.config.flaky_rpc_rate > 0.0:
+            self.config.enabled = True
+
+    def register_byzantine_mutator(self, callback: Callable[[Message], Message]) -> None:
+        """Register custom function to mutate / tamper with outgoing payloads."""
+        self._byzantine_callbacks.append(callback)
+        self.config.enabled = True
+
+    # --- Packet Processing & Interception Pipeline ---
+
+    def evaluate_packet(
+        self,
+        msg: Message,
+        sender_id: str,
+        recipient_id: Optional[str] = None,
+    ) -> Tuple[Optional[Message], float, bool]:
+        """
+        Evaluate an inbound or outbound message against all active chaos rules.
+        Returns (processed_message, delay_seconds, should_drop).
+        """
+        if not self.config.enabled:
+            return msg, 0.0, False
+
+        self.metrics.total_packets_inspected += 1
+
+        # 1. Network Partition Check
+        if recipient_id and self.is_partitioned(sender_id, recipient_id):
+            self.metrics.total_packets_dropped += 1
+            logger.debug(f"[CHAOS DROP] Dropped packet {msg.type.value} due to partition ({sender_id} -> {recipient_id})")
+            return None, 0.0, True
+
+        # 2. Rule-Based Drop Check
+        for rule in list(self.drop_rules.values()):
+            if rule.matches(msg, sender_id, recipient_id):
+                rule.record_drop()
+                self.metrics.total_packets_dropped += 1
+                logger.debug(f"[CHAOS DROP] Dropped packet {msg.type.value} matching rule '{rule.rule_id}'")
+                return None, 0.0, True
+
+        # 3. Probabilistic Random Packet Loss
+        if self.config.packet_loss_rate > 0.0 and random.random() < self.config.packet_loss_rate:
+            self.metrics.total_packets_dropped += 1
+            logger.debug(f"[CHAOS DROP] Dropped packet {msg.type.value} due to random loss ({self.config.packet_loss_rate:.1%})")
+            return None, 0.0, True
+
+        # 4. Latency Jitter Calculation
+        delay_sec = self.latency_injector.calculate_delay_seconds()
+        if delay_sec > 0.0:
+            self.metrics.total_packets_delayed += 1
+            self.metrics.total_latency_injected_ms += delay_sec * 1000.0
+
+        # 5. Byzantine Payload Corruption
+        processed_msg = msg
+        if self.config.byzantine_corruption_rate > 0.0 and random.random() < self.config.byzantine_corruption_rate:
+            self.metrics.total_packets_corrupted += 1
+            processed_msg = self._corrupt_message(msg)
+            logger.warning(f"[CHAOS BYZANTINE] Injected Byzantine corruption into packet {msg.type.value}")
+
+        for cb in self._byzantine_callbacks:
+            processed_msg = cb(processed_msg)
+
+        return processed_msg, delay_sec, False
+
+    def _corrupt_message(self, msg: Message) -> Message:
+        """Mutate message payload or term to simulate malicious/corrupted transmission."""
+        corrupted_payload = dict(msg.payload)
+        corrupted_payload["__byzantine_corrupted__"] = True
+        if "term" in corrupted_payload and isinstance(corrupted_payload["term"], int):
+            corrupted_payload["term"] = corrupted_payload["term"] + 999
+        if "entries" in corrupted_payload and isinstance(corrupted_payload["entries"], list):
+            corrupted_payload["entries"] = []  # Truncate entries
+        return Message(
+            msg_id=msg.msg_id,
+            type=msg.type,
+            sender_id=msg.sender_id,
+            payload=corrupted_payload,
+            timestamp=msg.timestamp,
+        )
+
+    def should_abort_flaky_rpc(self) -> bool:
+        """Check if an RPC call should fail with a simulated flaky network exception."""
+        if not self.config.enabled or self.config.flaky_rpc_rate <= 0.0:
+            return False
+        if random.random() < self.config.flaky_rpc_rate:
+            self.metrics.total_flaky_rpc_aborted += 1
+            return True
+        return False
+
+    def get_metrics(self) -> ChaosMetrics:
+        """Retrieve live operational telemetry of the Chaos Engine."""
+        self.metrics.active_partitions_count = len([p for p in self.partitions.values() if p.is_active])
+        return self.metrics
+
+
