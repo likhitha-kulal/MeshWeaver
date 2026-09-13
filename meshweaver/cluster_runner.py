@@ -186,6 +186,102 @@ class LocalClusterRunner:
             except Exception as e:
                 logger.debug(f"Health check error: {e}")
 
+    async def kill_node(self, name_or_id: str, simulated_crash: bool = True) -> bool:
+        """
+        Simulate immediate node failure or crash.
+        Stops the target node process and marks its lifecycle state as CRASHED.
+        """
+        node = self.get_node(name_or_id)
+        if not node:
+            return False
+
+        name = None
+        for n, inst in self.nodes.items():
+            if inst == node:
+                name = n
+                break
+        if not name:
+            return False
+
+        try:
+            await node.stop()
+        except Exception as e:
+            logger.debug(f"Error during node kill {name}: {e}")
+
+        if name in self.processes:
+            self.processes[name].state = NodeLifecycleState.CRASHED if simulated_crash else NodeLifecycleState.STOPPED
+
+        # Remove from active nodes dict so cluster routing bypasses it
+        self.nodes.pop(name, None)
+        logger.warning(f"[CLUSTER NODE CRASH] Node '{name}' ({node.node_id.hex()[:8]}) was killed/crashed.")
+        return True
+
+    async def restart_node(self, name_or_id: str) -> Optional[MeshNode]:
+        """
+        Cold-reboot a crashed or stopped node.
+        Re-instantiates the MeshNode using its original StorageConfig so WAL replay restores state.
+        Re-connects the node with active cluster peers.
+        """
+        name = None
+        for n, proc in self.processes.items():
+            if n == name_or_id or proc.node_id == name_or_id or proc.node_id.startswith(name_or_id):
+                name = n
+                break
+        if not name or name not in self.processes:
+            return None
+
+        proc = self.processes[name]
+        logger.info(f"[CLUSTER RESTART] Rebooting node '{name}' with cold-boot WAL replay...")
+
+        storage_cfg = StorageConfig(
+            data_dir=os.path.join(self.config.data_dir, f"cluster_{name}"),
+            node_storage_id=name,
+            enable_wal=self.config.enable_wal,
+        )
+
+        rebooted_node = MeshNode(
+            host=proc.host,
+            udp_port=proc.udp_port,
+            tcp_port=proc.tcp_port,
+            storage_config=storage_cfg,
+        )
+        await rebooted_node.start()
+
+        # Update process records
+        proc.node_id = rebooted_node.node_id.hex()
+        proc.bound_udp_port = rebooted_node.bound_udp_port
+        proc.bound_tcp_port = rebooted_node.bound_tcp_port
+        proc.state = NodeLifecycleState.HEALTHY
+        proc.restart_count += 1
+        proc.last_heartbeat = time.time()
+
+        self.nodes[name] = rebooted_node
+
+        # Re-wire connections with active peers
+        for peer_name, peer_node in self.nodes.items():
+            if peer_name != name:
+                rebooted_node.register_neighbor(
+                    peer_node.node_id.hex(), peer_node.host, peer_node.bound_udp_port, peer_node.bound_tcp_port
+                )
+                peer_node.register_neighbor(
+                    rebooted_node.node_id.hex(), rebooted_node.host, rebooted_node.bound_udp_port, rebooted_node.bound_tcp_port
+                )
+
+        await asyncio.sleep(0.15)
+        logger.info(f"[CLUSTER REBOOTED] Node '{name}' successfully restored and rejoined cluster.")
+        return rebooted_node
+
+    async def rolling_restart(self, delay_between_nodes: float = 0.4) -> None:
+        """Perform zero-downtime rolling reboot of every node across the cluster."""
+        logger.info("[ROLLING RESTART] Commencing cluster rolling reboot...")
+        node_names = list(self.processes.keys())
+        for name in node_names:
+            await self.kill_node(name, simulated_crash=False)
+            await asyncio.sleep(0.1)
+            await self.restart_node(name)
+            await asyncio.sleep(delay_between_nodes)
+        logger.info("[ROLLING RESTART] Rolling reboot complete across all cluster nodes.")
+
     async def stop(self) -> None:
         """Gracefully shut down all nodes in the cluster."""
         if not self._is_running:
@@ -195,7 +291,7 @@ class LocalClusterRunner:
         if self._health_check_task and not self._health_check_task.done():
             self._health_check_task.cancel()
 
-        for name, node in self.nodes.items():
+        for name, node in list(self.nodes.items()):
             try:
                 await node.stop()
                 if name in self.processes:
@@ -205,3 +301,4 @@ class LocalClusterRunner:
 
         self.nodes.clear()
         logger.info(f"[CLUSTER STOP] Cluster '{self.config.cluster_name}' shut down.")
+
