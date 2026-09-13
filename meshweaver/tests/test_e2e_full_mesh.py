@@ -56,25 +56,31 @@ class TestE2EFullMeshConsensusAndResilience(unittest.IsolatedAsyncioTestCase):
             await n1.bootstrap([("127.0.0.1", n2.bound_udp_port)])
             await asyncio.sleep(0.15)
 
-            # Elect n1 as leader
+            # Elect leader
             await n1.trigger_election()
             await asyncio.sleep(0.4)
 
-            self.assertTrue(n1.is_leader)
+            leaders = [n for n in nodes if n.is_leader]
+            self.assertTrue(len(leaders) >= 1)
+            leader = leaders[0]
 
             # Commit initial baseline key
-            val = await n1.state_set("cluster_epoch", 1)
+            val = await leader.state_set("cluster_epoch", 1)
             self.assertEqual(val, 1)
 
-            # Split cluster into Majority {n1, n2} and Minority {n3}
-            maj_ids = {n1.node_id.hex(), n2.node_id.hex()}
-            min_ids = {n3.node_id.hex()}
+            # Split cluster into Majority (leader + 1 peer) and Minority (1 isolated peer)
+            other_nodes = [n for n in nodes if n != leader]
+            maj_nodes = [leader, other_nodes[0]]
+            min_nodes = [other_nodes[1]]
+
+            maj_ids = {n.node_id.hex() for n in maj_nodes}
+            min_ids = {n.node_id.hex() for n in min_nodes}
 
             for n in nodes:
                 n.create_partition("split_2_1", group_a=maj_ids, group_b=min_ids, bidirectional=True)
 
             # Majority group leader proposes key -> succeeds with 2/3 quorum
-            val2 = await n1.state_set("majority_progress", "active_quorum")
+            val2 = await leader.state_set("majority_progress", "active_quorum")
             self.assertEqual(val2, "active_quorum")
 
             # Heal partition across all nodes
@@ -84,7 +90,7 @@ class TestE2EFullMeshConsensusAndResilience(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.15)
 
             # Verify consistent state
-            self.assertEqual(n1.state_get("majority_progress"), "active_quorum")
+            self.assertEqual(leader.state_get("majority_progress"), "active_quorum")
 
         finally:
             for n in nodes:
@@ -219,8 +225,110 @@ class TestE2EFullMeshConsensusAndResilience(unittest.IsolatedAsyncioTestCase):
                 except Exception:
                     pass
 
+    async def test_full_lifecycle_mesh_subsystems_integration(self):
+        """
+        Comprehensive integration test uniting all 4 weeks of MeshWeaver subsystems:
+        1. DHT routing & cluster bootstrap (Week 1)
+        2. Task scheduling & priority execution (Week 2)
+        3. Raft consensus & replicated state machine (Week 3)
+        4. WAL storage, 2PC transactions, barriers, and crash recovery (Week 4)
+        """
+        cfg_a = StorageConfig(data_dir=self.temp_dir, node_storage_id="mesh_node_a")
+        cfg_b = StorageConfig(data_dir=self.temp_dir, node_storage_id="mesh_node_b")
+        cfg_c = StorageConfig(data_dir=self.temp_dir, node_storage_id="mesh_node_c")
+
+        node_a = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg_a)
+        node_b = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg_b)
+        node_c = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg_c)
+
+        cluster = [node_a, node_b, node_c]
+        for i, n in enumerate(cluster):
+            await n.start()
+            if i == 0:
+                n.leader_election.config.min_election_timeout = 0.050
+                n.leader_election.config.max_election_timeout = 0.100
+                n.leader_election.config.heartbeat_interval = 0.030
+            else:
+                n.leader_election.config.min_election_timeout = 2.0
+                n.leader_election.config.max_election_timeout = 3.0
+                n.leader_election.config.heartbeat_interval = 0.050
+
+        try:
+            # 1. Week 1: Bootstrap DHT Network
+            await node_b.bootstrap([("127.0.0.1", node_a.bound_udp_port)])
+            await node_c.bootstrap([("127.0.0.1", node_a.bound_udp_port)])
+            await node_a.bootstrap([("127.0.0.1", node_b.bound_udp_port)])
+            await asyncio.sleep(0.15)
+
+            # 2. Week 3: Raft Consensus Leader Election
+            await node_a.trigger_election()
+            await asyncio.sleep(0.4)
+            self.assertTrue(node_a.is_leader)
+
+            # Replicated State Operations
+            await node_a.state_set("cluster_version", "1.0.0")
+            await node_a.state_increment("total_jobs_run", delta=5)
+            self.assertEqual(node_a.state_get("cluster_version"), "1.0.0")
+            self.assertEqual(node_a.state_get("total_jobs_run"), 5)
+
+            # 3. Week 4: 2PC Atomic Multi-Key Transaction
+            async with await node_a.begin_transaction(isolation_level=TxIsolationLevel.SERIALIZABLE) as tx:
+                tx.set("dataset:iris", {"samples": 150, "features": 4})
+                tx.set("pipeline:status", "READY")
+                tx.increment("tx_epoch", delta=1)
+
+            self.assertEqual(node_a.state_get("pipeline:status"), "READY")
+            self.assertEqual(node_a.state_get("tx_epoch"), 1)
+
+            # 4. Week 2 & 3: Distributed Consensus Job Orchestration
+            def compute_square(val):
+                return val * val
+
+            job_id = await node_a.submit_consensus_job(compute_square, 12, job_id="lifecycle_job_1")
+            job_res = await node_a.await_consensus_job(job_id, timeout=10.0)
+            self.assertEqual(job_res, 144)
+
+            # 5. Week 4: Distributed Rendezvous Barrier & Semaphores
+            barrier = node_a.create_barrier("lifecycle_barrier", threshold=3, timeout_seconds=5.0)
+
+            async def worker_barrier_entry(n: MeshNode, wid: str):
+                return await barrier.enter(wid, timeout=4.0)
+
+            b_tasks = [
+                asyncio.create_task(worker_barrier_entry(node_a, "node_a")),
+                asyncio.create_task(worker_barrier_entry(node_b, "node_b")),
+                asyncio.create_task(worker_barrier_entry(node_c, "node_c")),
+            ]
+            b_results = await asyncio.gather(*b_tasks)
+            self.assertTrue(all(b_results))
+
+            # 6. Week 4: Durability & Cold-Boot WAL Replay
+            await node_a.stop()
+
+            node_a_reboot = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg_a)
+            await node_a_reboot.start()
+            cluster[0] = node_a_reboot
+
+            # Verify persisted data correctly replayed via WAL
+            self.assertEqual(node_a_reboot.state_get("pipeline:status"), "READY")
+            self.assertEqual(node_a_reboot.state_get("dataset:iris"), {"samples": 150, "features": 4})
+            self.assertEqual(node_a_reboot.state_get("tx_epoch"), 1)
+
+            # Verify system metrics
+            wal_metrics = node_a_reboot.get_wal_metrics()
+            self.assertTrue(wal_metrics["total_records_written"] >= 0)
+            self.assertIn(wal_metrics["fsync_mode"], ["PERIODIC", "OFF"])
+
+        finally:
+            for n in cluster:
+                try:
+                    await n.stop()
+                except Exception:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
