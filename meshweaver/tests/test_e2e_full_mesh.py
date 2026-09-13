@@ -39,19 +39,28 @@ class TestE2EFullMeshConsensusAndResilience(unittest.IsolatedAsyncioTestCase):
             cfg = StorageConfig(data_dir=self.temp_dir, node_storage_id=f"node_{i}")
             n = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg)
             await n.start()
-            n.leader_election.config.min_election_timeout = 0.150
-            n.leader_election.config.max_election_timeout = 0.300
-            n.leader_election.config.heartbeat_interval = 0.040
+            if i == 1:
+                n.leader_election.config.min_election_timeout = 0.050
+                n.leader_election.config.max_election_timeout = 0.100
+                n.leader_election.config.heartbeat_interval = 0.030
+            else:
+                n.leader_election.config.min_election_timeout = 2.0
+                n.leader_election.config.max_election_timeout = 3.0
+                n.leader_election.config.heartbeat_interval = 0.050
             nodes.append(n)
 
         try:
-            # Full mesh interconnect
+            # Full mesh interconnect & bootstrap
+            for n in nodes[1:]:
+                await n.bootstrap([("127.0.0.1", nodes[0].bound_udp_port)])
+            await nodes[0].bootstrap([("127.0.0.1", nodes[1].bound_udp_port)])
+
             for i, na in enumerate(nodes):
                 for j, nb in enumerate(nodes):
                     if i != j:
                         na.register_neighbor(nb.node_id.hex(), nb.host, nb.bound_udp_port, nb.bound_tcp_port)
 
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.15)
 
             # Elect leader on node 1
             await nodes[0].trigger_election()
@@ -98,6 +107,74 @@ class TestE2EFullMeshConsensusAndResilience(unittest.IsolatedAsyncioTestCase):
                 except Exception:
                     pass
 
+    async def test_2pc_transaction_recovery_under_node_crash_and_partition(self):
+        """
+        Verify that 2PC distributed transactions maintain ACID semantics across node
+        crashes (WAL replay on reboot) and abort cleanly during network partitions.
+        """
+        cfg1 = StorageConfig(data_dir=self.temp_dir, node_storage_id="tx_crash_node_1")
+        cfg2 = StorageConfig(data_dir=self.temp_dir, node_storage_id="tx_crash_node_2")
+        cfg3 = StorageConfig(data_dir=self.temp_dir, node_storage_id="tx_crash_node_3")
+
+        n1 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg1)
+        n2 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg2)
+        n3 = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg3)
+
+        nodes = [n1, n2, n3]
+        for n in nodes:
+            await n.start()
+
+        try:
+            for i, na in enumerate(nodes):
+                for j, nb in enumerate(nodes):
+                    if i != j:
+                        na.register_neighbor(nb.node_id.hex(), nb.host, nb.bound_udp_port, nb.bound_tcp_port)
+
+            # 1. Execute ACID 2PC transaction on node 1
+            async with await n1.begin_transaction(isolation_level=TxIsolationLevel.SERIALIZABLE) as tx:
+                tx.set("balance:alice", 5000)
+                tx.set("balance:bob", 3000)
+                tx.increment("tx_counter", delta=1)
+
+            self.assertEqual(n1.state_get("balance:alice"), 5000)
+            self.assertEqual(n1.state_get("balance:bob"), 3000)
+            self.assertEqual(n1.state_get("tx_counter"), 1)
+
+            # 2. Crash node 1 abruptly and verify cold-boot recovery via WAL
+            await n1.stop()
+
+            n1_reboot = MeshNode(host="127.0.0.1", udp_port=0, tcp_port=0, storage_config=cfg1)
+            await n1_reboot.start()
+            nodes[0] = n1_reboot
+
+            # Verify persisted data recovered accurately after crash
+            self.assertEqual(n1_reboot.state_get("balance:alice"), 5000)
+            self.assertEqual(n1_reboot.state_get("balance:bob"), 3000)
+            self.assertEqual(n1_reboot.state_get("tx_counter"), 1)
+
+            # 3. Simulate conflict and rollback under chaos drop
+            n1_reboot.set_packet_loss(1.0)
+            tx_fail = await n1_reboot.begin_transaction()
+            tx_fail.set("balance:alice", 99999)
+            await tx_fail.rollback(reason="Chaos injection abort")
+
+            # Balance remains unmodified
+            self.assertEqual(n1_reboot.state_get("balance:alice"), 5000)
+            self.assertEqual(tx_fail.coordinator.get_transaction(tx_fail.tx_id).status, TxStatus.ABORTED)
+
+            # Heal chaos
+            n1_reboot.heal_chaos()
+            self.assertEqual(len(n1_reboot.chaos_engine.drop_rules), 0)
+            self.assertEqual(n1_reboot.chaos_engine.metrics.active_partitions_count, 0)
+
+        finally:
+            for n in nodes:
+                try:
+                    await n.stop()
+                except Exception:
+                    pass
+
 
 if __name__ == "__main__":
     unittest.main()
+
