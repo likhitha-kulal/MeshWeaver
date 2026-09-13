@@ -302,3 +302,62 @@ class LocalClusterRunner:
         self.nodes.clear()
         logger.info(f"[CLUSTER STOP] Cluster '{self.config.cluster_name}' shut down.")
 
+    def get_cluster_summary(self) -> Dict[str, Any]:
+        """Aggregate comprehensive multi-node cluster status and health telemetry."""
+        healthy_count = len([p for p in self.processes.values() if p.state == NodeLifecycleState.HEALTHY])
+        crashed_count = len([p for p in self.processes.values() if p.state == NodeLifecycleState.CRASHED])
+        stopped_count = len([p for p in self.processes.values() if p.state == NodeLifecycleState.STOPPED])
+
+        leader_inst = self.leader
+        leader_name = None
+        leader_id = None
+        if leader_inst:
+            leader_id = leader_inst.node_id.hex()
+            for n, inst in self.nodes.items():
+                if inst == leader_inst:
+                    leader_name = n
+                    break
+
+        return {
+            "cluster_name": self.config.cluster_name,
+            "topology": self.config.topology.value,
+            "total_nodes": len(self.processes),
+            "healthy_nodes": healthy_count,
+            "crashed_nodes": crashed_count,
+            "stopped_nodes": stopped_count,
+            "leader_node_id": leader_id,
+            "leader_name": leader_name,
+            "uptime_seconds": time.time() - self._start_time if self._start_time > 0 else 0.0,
+            "nodes": [p.to_dict() for p in self.processes.values()],
+        }
+
+    async def trigger_cluster_election(self, target_node_name: Optional[str] = None) -> Optional[MeshNode]:
+        """Trigger leader election on a designated node or the first healthy node."""
+        if target_node_name and target_node_name in self.nodes:
+            target = self.nodes[target_node_name]
+        elif self.nodes:
+            target = next(iter(self.nodes.values()))
+        else:
+            return None
+
+        await target.trigger_election()
+        await asyncio.sleep(0.4)
+        return self.leader
+
+    def format_status_table(self) -> str:
+        """Render a clean ASCII status table of all managed cluster nodes."""
+        lines = [
+            f"=== {self.config.cluster_name} ({self.config.topology.value}) ===",
+            f"{'Name':<10} {'NodeID':<12} {'Address':<22} {'State':<10} {'Role':<10} {'Restarts':<8}",
+            "-" * 74,
+        ]
+        for name, proc in self.processes.items():
+            role = "👑 LEADER" if proc.is_leader else "FOLLOWER"
+            addr = f"{proc.host}:{proc.udp_port}"
+            lines.append(
+                f"{name:<10} {proc.node_id[:8]:<12} {addr:<22} {proc.state.value:<10} {role:<10} {proc.restart_count:<8}"
+            )
+        lines.append("=" * 74)
+        return "\n".join(lines)
+
+
