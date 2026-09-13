@@ -352,7 +352,7 @@ class LocalClusterRunner:
             "-" * 74,
         ]
         for name, proc in self.processes.items():
-            role = "👑 LEADER" if proc.is_leader else "FOLLOWER"
+            role = "[LEADER]" if proc.is_leader else "FOLLOWER"
             addr = f"{proc.host}:{proc.udp_port}"
             lines.append(
                 f"{name:<10} {proc.node_id[:8]:<12} {addr:<22} {proc.state.value:<10} {role:<10} {proc.restart_count:<8}"
