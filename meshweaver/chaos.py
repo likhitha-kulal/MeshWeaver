@@ -344,6 +344,7 @@ class ChaosEngine:
             msg_id=msg.msg_id,
             type=msg.type,
             sender_id=msg.sender_id,
+            sender_udp_port=msg.sender_udp_port,
             payload=corrupted_payload,
             timestamp=msg.timestamp,
         )

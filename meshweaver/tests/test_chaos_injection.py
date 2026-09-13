@@ -77,5 +77,72 @@ class TestChaosPacketDropAndLatency(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(d["active_partitions_count"], 1)
 
 
+class TestChaosEnginePartitionsAndHealing(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.engine = ChaosEngine(node_id="test_node_001")
+
+    def test_partition_creation_and_blocking(self):
+        # Create partition between [node_a, node_b] and [node_c, node_d]
+        part = self.engine.create_partition(
+            partition_id="split_brain_1",
+            group_a={"node_a", "node_b"},
+            group_b={"node_c", "node_d"},
+            bidirectional=True,
+        )
+        self.assertTrue(part.is_active)
+        self.assertEqual(self.engine.metrics.active_partitions_count, 1)
+
+        # Cross-partition traffic is blocked
+        self.assertTrue(self.engine.is_partitioned("node_a", "node_c"))
+        self.assertTrue(self.engine.is_partitioned("node_c", "node_a"))
+        self.assertTrue(self.engine.is_partitioned("node_b", "node_d"))
+
+        # Intra-group traffic is NOT blocked
+        self.assertFalse(self.engine.is_partitioned("node_a", "node_b"))
+        self.assertFalse(self.engine.is_partitioned("node_c", "node_d"))
+
+    def test_isolate_node_and_heal(self):
+        self.engine.isolate_node("node_rogue")
+        self.assertTrue(self.engine.is_partitioned("node_rogue", "node_a"))
+        self.assertTrue(self.engine.is_partitioned("node_b", "node_rogue"))
+
+        # Heal all
+        self.engine.heal_all()
+        self.assertFalse(self.engine.is_partitioned("node_rogue", "node_a"))
+        self.assertEqual(self.engine.metrics.active_partitions_count, 0)
+
+    def test_evaluate_packet_drops_on_partition(self):
+        self.engine.create_partition("p1", group_a={"node_1"}, group_b={"node_2"})
+        msg = Message(msg_id="m1", type=MessageType.RAFT_APPEND_ENTRIES_REQUEST, sender_id="node_1", sender_udp_port=9000, payload={})
+
+        processed_msg, delay, should_drop = self.engine.evaluate_packet(msg, sender_id="node_1", recipient_id="node_2")
+        self.assertTrue(should_drop)
+        self.assertIsNone(processed_msg)
+        self.assertEqual(self.engine.metrics.total_packets_dropped, 1)
+
+    def test_byzantine_payload_mutation(self):
+        self.engine.set_byzantine_corruption(1.0)
+        msg = Message(
+            msg_id="m1",
+            type=MessageType.RAFT_APPEND_ENTRIES_REQUEST,
+            sender_id="node_1",
+            sender_udp_port=9000,
+            payload={"term": 5, "entries": [1, 2, 3]},
+        )
+
+        processed_msg, delay, should_drop = self.engine.evaluate_packet(msg, sender_id="node_1", recipient_id="node_2")
+        self.assertFalse(should_drop)
+        self.assertIsNotNone(processed_msg)
+        self.assertTrue(processed_msg.payload.get("__byzantine_corrupted__"))
+        self.assertEqual(processed_msg.payload.get("term"), 1004)
+        self.assertEqual(processed_msg.payload.get("entries"), [])
+
+    def test_flaky_rpc_abortion(self):
+        self.engine.set_flaky_rpc_rate(1.0)
+        self.assertTrue(self.engine.should_abort_flaky_rpc())
+        self.assertEqual(self.engine.metrics.total_flaky_rpc_aborted, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
+
